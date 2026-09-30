@@ -25,10 +25,12 @@ def canny_edges(img: Img) -> NDArray[np.bool_]:
     e1 = cv2.Canny(lum, lo, hi, L2gradient=True)
     blur = cv2.GaussianBlur(lum, (0, 0), 1.5)
     e2 = cv2.Canny(blur, lo * 0.8, hi * 0.8, L2gradient=True)
-    return (e1 > 0) | (e2 > 0)
+    return np.asarray((e1 > 0) | (e2 > 0), dtype=bool)
 
 
-def edge_fscore(pred: NDArray[np.bool_], gt: NDArray[np.bool_], tol: float = EDGE_TOLERANCE_PX) -> tuple[float, float, float]:
+def edge_fscore(
+    pred: NDArray[np.bool_], gt: NDArray[np.bool_], tol: float = EDGE_TOLERANCE_PX
+) -> tuple[float, float, float]:
     """Precision, recall, F with a distance tolerance (distance-transform approximation of BSDS)."""
     if not gt.any() or not pred.any():
         return 0.0, 0.0, 0.0
@@ -40,7 +42,9 @@ def edge_fscore(pred: NDArray[np.bool_], gt: NDArray[np.bool_], tol: float = EDG
     return precision, recall, f
 
 
-def vertical_deviation_deg(img: Img, mask: NDArray[np.bool_] | None = None, max_tilt_deg: float = 10.0) -> tuple[float, int]:
+def vertical_deviation_deg(
+    img: Img, mask: NDArray[np.bool_] | None = None, max_tilt_deg: float = 10.0
+) -> tuple[float, int]:
     """Length-weighted median |angle from vertical| of near-vertical LSD segments."""
     lum = np.clip(luminance(img) * 255.0, 0, 255).astype(np.uint8)
     lsd = cv2.createLineSegmentDetector()
@@ -71,13 +75,15 @@ def vertical_deviation_deg(img: Img, mask: NDArray[np.bool_] | None = None, max_
     return median, len(devs)
 
 
-def align_scale_shift(pred: NDArray[np.float32], gt: NDArray[np.float32], mask: NDArray[np.bool_]) -> NDArray[np.float32]:
+def align_scale_shift(
+    pred: NDArray[np.float32], gt: NDArray[np.float32], mask: NDArray[np.bool_]
+) -> NDArray[np.float32]:
     """Least-squares ``s·pred + b`` fitted to ``gt`` on ``mask``."""
     p = pred[mask].astype(np.float64)
     g = gt[mask].astype(np.float64)
     a = np.stack([p, np.ones_like(p)], axis=1)
     sol, *_ = np.linalg.lstsq(a, g, rcond=None)
-    return (pred * sol[0] + sol[1]).astype(np.float32)
+    return np.asarray(pred * sol[0] + sol[1], dtype=np.float32)
 
 
 def abs_rel(pred: NDArray[np.float32], gt: NDArray[np.float32], mask: NDArray[np.bool_]) -> float:
@@ -95,7 +101,9 @@ class OpeningMatch:
 
 
 def match_openings(
-    gt_masks: dict[str, NDArray[np.bool_]], pred_masks: list[NDArray[np.bool_]], min_iou: float = 0.3
+    gt_masks: dict[str, NDArray[np.bool_]],
+    pred_masks: list[NDArray[np.bool_]],
+    min_iou: float = 0.3,
 ) -> tuple[list[OpeningMatch], int]:
     """Hungarian matching of predicted instances to GT opening masks. Returns matches and #extra."""
     ids = list(gt_masks)
@@ -112,15 +120,17 @@ def match_openings(
     used: set[int] = set()
     if pred_masks:
         rows, cols = linear_sum_assignment(-iou)
-        pairs = dict(zip(rows.tolist(), cols.tolist(), strict=True))
+        pairs: dict[int, int] = {
+            int(r): int(c) for r, c in zip(rows.tolist(), cols.tolist(), strict=True)
+        }
     else:
         pairs = {}
     for i, oid in enumerate(ids):
-        j = pairs.get(i)
-        if j is not None and iou[i, j] >= min_iou:
-            matches.append(OpeningMatch(oid, float(iou[i, j]), True))
-            used.add(j)
+        mj = pairs.get(i)
+        if mj is not None and iou[i, mj] >= min_iou:
+            matches.append(OpeningMatch(oid, float(iou[i, mj]), True))
+            used.add(mj)
         else:
-            matches.append(OpeningMatch(oid, float(iou[i, j]) if j is not None else 0.0, False))
+            matches.append(OpeningMatch(oid, float(iou[i, mj]) if mj is not None else 0.0, False))
     extra = len(pred_masks) - len(used)
     return matches, extra

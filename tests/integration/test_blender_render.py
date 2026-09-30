@@ -32,8 +32,12 @@ def rendered(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, object]:
     plan = mock_plan("prj_b", [])
     reg = AssumptionRegister("t")
     compiled = SceneCompiler(MaterialLibrary.load(REPO_ROOT / "configs")).compile(
-        plan, Section(id="s", level="L0", kind="rooms", room_ids=["R1"]), default_brief("s", reg),
-        RenderSettings(width=W, height=H, samples=8, device="CPU"), reg, scene_id="scn",
+        plan,
+        Section(id="s", level="L0", kind="rooms", room_ids=["R1"]),
+        default_brief("s", reg),
+        RenderSettings(width=W, height=H, samples=8, device="CPU"),
+        reg,
+        scene_id="scn",
     )
     cam = propose_cameras(plan, ["R1"], 1, W, H, reg)[0].camera
     spec = compiled.spec.model_copy(update={"cameras": [cam]})
@@ -42,7 +46,9 @@ def rendered(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, object]:
     for rel, blob in compiled.mesh_blobs.items():
         (pkg / rel).write_bytes(blob)
     (pkg / "scene.json").write_text(spec.model_dump_json())
-    BlenderRunner(settings).run(["render", str(pkg), str(tmp / "out"), cam.id], cwd=pkg, timeout_s=600)
+    BlenderRunner(settings).run(
+        ["render", str(pkg), str(tmp / "out"), cam.id], cwd=pkg, timeout_s=600
+    )
     return tmp / "out", spec
 
 
@@ -74,7 +80,7 @@ def test_reprojected_room_corner_lies_on_line_art(rendered: tuple[Path, object])
     cam = spec.cameras[0]  # type: ignore[attr-defined]
     # far vertical room corner (5, 4) at mid-height is in view for the corner camera
     uv, z = project(cam, W, H, np.array([[5.0, 4.0, 1.3]]))
-    u, v = int(round(uv[0, 0])), int(round(uv[0, 1]))
+    u, v = round(uv[0, 0]), round(uv[0, 1])
     assert z[0] > 0 and 0 <= u < W and 0 <= v < H
     window = edges[max(0, v - 2) : v + 3, max(0, u - 2) : u + 3]
     assert window.max() == 255, "corner not within 2 px of the line art"

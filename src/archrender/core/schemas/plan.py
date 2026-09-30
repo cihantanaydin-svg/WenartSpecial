@@ -149,7 +149,13 @@ class PlanGraph(Strict):
         level_ids = {lv.id for lv in self.levels}
         wall_ids = {w.id for w in self.walls}
         ids: set[str] = set()
-        for el in [*self.walls, *self.openings, *self.rooms, *self.columns]:
+        elements: list[Wall | Opening | Room | Column] = [
+            *self.walls,
+            *self.openings,
+            *self.rooms,
+            *self.columns,
+        ]
+        for el in elements:
             if el.id in ids:
                 raise ValueError(f"duplicate element id {el.id!r}")
             ids.add(el.id)

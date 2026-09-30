@@ -70,7 +70,9 @@ class BlenderRunner:
         env = {
             k: v
             for k, v in os.environ.items()
-            if k.startswith(("CUDA", "NVIDIA", "OPTIX", "LD_", "PATH", "HOME", "LANG", "LC_", "TMP"))
+            if k.startswith(
+                ("CUDA", "NVIDIA", "OPTIX", "LD_", "PATH", "HOME", "LANG", "LC_", "TMP")
+            )
         }
         env["PYTHONNOUSERSITE"] = "1"
         cache = self.settings.data_dir / "cache"

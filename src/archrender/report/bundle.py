@@ -74,9 +74,16 @@ def _guard(msg: str) -> ArchRenderError:
 
 def render_report(inp: BundleInput, plan: PlanGraph) -> str:
     env = Environment(
-        undefined=StrictUndefined, autoescape=select_autoescape(["html", "j2"]), trim_blocks=True, lstrip_blocks=True
+        undefined=StrictUndefined,
+        autoescape=select_autoescape(["html", "j2"]),
+        trim_blocks=True,
+        lstrip_blocks=True,
     )
-    text = resources.files("archrender.report").joinpath("templates", "qa_report.html.j2").read_text("utf-8")
+    text = (
+        resources.files("archrender.report")
+        .joinpath("templates", "qa_report.html.j2")
+        .read_text("utf-8")
+    )
     views = [v.outcome for v in inp.views]
     return env.from_string(text).render(
         project_name=inp.project_name,
@@ -112,10 +119,18 @@ def build_bundle(inp: BundleInput, store: ProjectStore) -> tuple[CasRef, CasRef]
         files.append(("model/scene.blend", store.read_bytes(inp.blend_file)))
     files.append(("plan/plan.json", store.read_bytes(inp.plan_json)))
     scene = json.loads(store.read_bytes(inp.scene_json))
-    files.append(("manifests/scene_manifest.json", json.dumps({"assets": scene.get("assets", [])}, indent=1).encode()))
+    files.append(
+        (
+            "manifests/scene_manifest.json",
+            json.dumps({"assets": scene.get("assets", [])}, indent=1).encode(),
+        )
+    )
     files.append(("manifests/run_manifest.json", inp.manifest.model_dump_json(indent=1).encode()))
     files.append(
-        ("qa/view_outcomes.json", json.dumps([v.outcome.model_dump(mode="json") for v in inp.views], indent=1).encode())
+        (
+            "qa/view_outcomes.json",
+            json.dumps([v.outcome.model_dump(mode="json") for v in inp.views], indent=1).encode(),
+        )
     )
     files.append(("qa/qa_report.html", report_html.encode("utf-8")))
     readme = (
@@ -136,7 +151,11 @@ def build_bundle(inp: BundleInput, store: ProjectStore) -> tuple[CasRef, CasRef]
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for name, data in sorted(files):
             info = zipfile.ZipInfo(name, date_time=_FIXED_DATE)
-            info.compress_type = zipfile.ZIP_STORED if name.endswith((".png", ".jpg", ".glb")) else zipfile.ZIP_DEFLATED
+            info.compress_type = (
+                zipfile.ZIP_STORED
+                if name.endswith((".png", ".jpg", ".glb"))
+                else zipfile.ZIP_DEFLATED
+            )
             info.external_attr = 0o644 << 16
             zf.writestr(info, data)
     zip_ref = store.put_bytes(buf.getvalue(), "application/zip", f"archrender_{inp.run_id}.zip")

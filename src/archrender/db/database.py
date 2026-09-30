@@ -21,7 +21,9 @@ class Database:
     def conn(self) -> sqlite3.Connection:
         c: sqlite3.Connection | None = getattr(self._local, "conn", None)
         if c is None:
-            c = sqlite3.connect(self.path, timeout=30.0, isolation_level=None, check_same_thread=True)
+            c = sqlite3.connect(
+                self.path, timeout=30.0, isolation_level=None, check_same_thread=True
+            )
             c.row_factory = sqlite3.Row
             c.execute("PRAGMA journal_mode=WAL")
             c.execute("PRAGMA synchronous=NORMAL")
@@ -43,10 +45,14 @@ class Database:
         else:
             c.execute("COMMIT")
 
-    def query(self, sql: str, params: tuple[object, ...] | dict[str, object] = ()) -> list[sqlite3.Row]:
+    def query(
+        self, sql: str, params: tuple[object, ...] | dict[str, object] = ()
+    ) -> list[sqlite3.Row]:
         return list(self.conn().execute(sql, params).fetchall())
 
-    def one(self, sql: str, params: tuple[object, ...] | dict[str, object] = ()) -> sqlite3.Row | None:
+    def one(
+        self, sql: str, params: tuple[object, ...] | dict[str, object] = ()
+    ) -> sqlite3.Row | None:
         row: sqlite3.Row | None = self.conn().execute(sql, params).fetchone()
         return row
 

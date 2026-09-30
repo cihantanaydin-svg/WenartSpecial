@@ -68,10 +68,17 @@ def create_run(svc: Services, project_id: str, config: RunConfig, user_id: str) 
     job_id = new_id("job")
     with svc.db.tx(immediate=True) as c:
         svc.queue.enqueue(
-            project_id, JobKind.RUN, "gpu", {"run_id": run_id}, created_by=user_id, job_id=job_id, conn=c
+            project_id,
+            JobKind.RUN,
+            "gpu",
+            {"run_id": run_id},
+            created_by=user_id,
+            job_id=job_id,
+            conn=c,
         )
         c.execute(
-            "INSERT INTO runs(id, project_id, job_id, config_json, status, created_by, created_at) VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO runs(id, project_id, job_id, config_json, status, created_by, created_at)"
+            " VALUES (?,?,?,?,?,?,?)",
             (run_id, project_id, job_id, config.model_dump_json(), "queued", user_id, now_iso()),
         )
     return run_id, job_id
@@ -83,7 +90,12 @@ def _git_commit() -> str | None:
         return env
     try:
         out = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, timeout=5, check=False
+            ["git", "rev-parse", "HEAD"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
         )
         return out.stdout.strip() or None
     except OSError:
@@ -113,7 +125,13 @@ class RunOrchestrator:
         cfg = RunConfig.model_validate_json(row["config_json"])
         svc.db.execute("UPDATE runs SET status = 'running' WHERE id = ?", (self.run_id,))
         gates = Gates(svc.db, self.run_id, cfg.gate_policy)
-        docs = [r["sha256"] for r in svc.db.query("SELECT sha256 FROM documents WHERE project_id = ? ORDER BY sha256", (ctx.project_id,))]
+        docs = [
+            r["sha256"]
+            for r in svc.db.query(
+                "SELECT sha256 FROM documents WHERE project_id = ? ORDER BY sha256",
+                (ctx.project_id,),
+            )
+        ]
         if not docs:
             raise ArchRenderError(
                 ErrorCode.PLAN_NO_PLAN_FOUND,
@@ -129,7 +147,10 @@ class RunOrchestrator:
             GateName.A,
             auto_ok=not blockers,
             mandatory=plan.source == "raster",
-            evidence={"issues": [i.model_dump(mode="json") for i in plan_out.issues], "plan_source": plan.source},
+            evidence={
+                "issues": [i.model_dump(mode="json") for i in plan_out.issues],
+                "plan_source": plan.source,
+            },
         )
 
         section = resolve_section(plan, cfg.room_ids)
@@ -151,22 +172,40 @@ class RunOrchestrator:
         ctx.progress(0.12, "S5 scene")
         scene_out = eng.run(
             st["scene"],
-            SceneIn(plan_json=plan_out.plan_json, section=section, brief=brief_out.brief, render=render, blend=cfg.blend_file),
+            SceneIn(
+                plan_json=plan_out.plan_json,
+                section=section,
+                brief=brief_out.brief,
+                render=render,
+                blend=cfg.blend_file,
+            ),
             ctx,
         )
         ctx.progress(0.2, "S6 cameras")
         cams_out = eng.run(
             st["cameras"],
-            CamerasIn(plan_json=plan_out.plan_json, room_ids=section.room_ids, views=cfg.views, width=cfg.width, height=cfg.height),
+            CamerasIn(
+                plan_json=plan_out.plan_json,
+                room_ids=section.room_ids,
+                views=cfg.views,
+                width=cfg.width,
+                height=cfg.height,
+            ),
             ctx,
         )
         gates.check(
             GateName.C,
             auto_ok=all(s > 0.2 for s in cams_out.scores),
-            evidence={"cameras": [c.model_dump(mode="json") for c in cams_out.cameras], "scores": cams_out.scores},
+            evidence={
+                "cameras": [c.model_dump(mode="json") for c in cams_out.cameras],
+                "scores": cams_out.scores,
+            },
         )
 
-        materials = {s.surface: svc.library.get(s.material_id).id.replace("_", " ") for s in brief_out.brief.surfaces}
+        materials = {
+            s.surface: svc.library.get(s.material_id).id.replace("_", " ")
+            for s in brief_out.brief.surfaces
+        }
         prompt, template_hash = compile_prompt(brief_out.brief, materials)
         views: list[BundleView] = []
         seeds: dict[str, int] = {}
@@ -175,7 +214,11 @@ class RunOrchestrator:
         for i, cam in enumerate(cams_out.cameras):
             base_p = 0.25 + 0.65 * i / n
             ctx.progress(base_p, f"S7 render {cam.id}")
-            r = eng.run(st["render"], RenderIn(scene_json=scene_out.scene_json, meshes=scene_out.meshes, camera=cam), ctx)
+            r = eng.run(
+                st["render"],
+                RenderIn(scene_json=scene_out.scene_json, meshes=scene_out.meshes, camera=cam),
+                ctx,
+            )
             render_info = r.info or render_info
             ctx.progress(base_p + 0.65 / n * 0.4, f"S8/S9 refine+QA {cam.id}")
             view_id = f"view_{i + 1}"
@@ -184,15 +227,24 @@ class RunOrchestrator:
             q = eng.run(
                 st["refine_qa"],
                 RefineQAIn(
-                    view_id=view_id, camera_id=cam.id, render=r, scene_json=scene_out.scene_json,
-                    prompt=prompt, prompt_template=template_hash, seed=seed,
+                    view_id=view_id,
+                    camera_id=cam.id,
+                    render=r,
+                    scene_json=scene_out.scene_json,
+                    prompt=prompt,
+                    prompt_template=template_hash,
+                    seed=seed,
                 ),
                 ctx,
             )
             views.append(
                 BundleView(
-                    outcome=q.outcome, delivered_png=q.delivered_png, delivered_jpg=q.delivered_jpg,
-                    base_png=r.beauty_png, camera_json=r.camera_json, log=q.log,
+                    outcome=q.outcome,
+                    delivered_png=q.delivered_png,
+                    delivered_jpg=q.delivered_jpg,
+                    base_png=r.beauty_png,
+                    camera_json=r.camera_json,
+                    log=q.log,
                 )
             )
 
@@ -208,13 +260,24 @@ class RunOrchestrator:
             GateName.D,
             auto_ok=gate_d_auto,
             evidence={
-                "views": [{"view_id": v.outcome.view_id, "status": v.outcome.status, "reason": v.outcome.reason} for v in views],
+                "views": [
+                    {
+                        "view_id": v.outcome.view_id,
+                        "status": v.outcome.status,
+                        "reason": v.outcome.reason,
+                    }
+                    for v in views
+                ],
                 "families_not_covered_by_real_models": missing,
             },
         )
 
         ctx.progress(0.95, "S10 bundle")
-        assumptions: list[Assumption] = [*brief_out.assumptions, *scene_out.assumptions, *cams_out.assumptions]
+        assumptions: list[Assumption] = [
+            *brief_out.assumptions,
+            *scene_out.assumptions,
+            *cams_out.assumptions,
+        ]
         manifest = RunManifest(
             run_id=self.run_id,
             project_id=ctx.project_id,
@@ -235,18 +298,42 @@ class RunOrchestrator:
             timings=eng.timings,
             uses_mocks=plan.source == "mock" or any(v.outcome.uses_mocks for v in views),
         )
-        gate_rows = [dict(r) for r in svc.db.query("SELECT gate, status, policy, decided_by, notes FROM gates WHERE run_id = ?", (self.run_id,))]
+        gate_rows = [
+            dict(r)
+            for r in svc.db.query(
+                "SELECT gate, status, policy, decided_by, notes FROM gates WHERE run_id = ?",
+                (self.run_id,),
+            )
+        ]
         bundle_input = BundleInput(
-            run_id=self.run_id, project_name=self._project_name(), mode=cfg.mode, plan_json=plan_out.plan_json,
-            scene_json=scene_out.scene_json, glb=scene_out.glb, blend_file=scene_out.blend_file, views=views,
-            assumptions=assumptions, gates=gate_rows, manifest=manifest,
+            run_id=self.run_id,
+            project_name=self._project_name(),
+            mode=cfg.mode,
+            plan_json=plan_out.plan_json,
+            scene_json=scene_out.scene_json,
+            glb=scene_out.glb,
+            blend_file=scene_out.blend_file,
+            views=views,
+            assumptions=assumptions,
+            gates=gate_rows,
+            manifest=manifest,
         )
         zip_ref, report_ref = build_bundle(bundle_input, ctx.store)
         bundle_id = new_id("bdl")
         with svc.db.tx(immediate=True) as c:
             c.execute(
-                "INSERT INTO bundles(id, project_id, run_id, job_id, sha256, size, status, created_at) VALUES (?,?,?,?,?,?,?,?)",
-                (bundle_id, ctx.project_id, self.run_id, self.job_id, zip_ref.sha256, zip_ref.size, "ready", now_iso()),
+                "INSERT INTO bundles(id, project_id, run_id, job_id, sha256, size, status, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    bundle_id,
+                    ctx.project_id,
+                    self.run_id,
+                    self.job_id,
+                    zip_ref.sha256,
+                    zip_ref.size,
+                    "ready",
+                    now_iso(),
+                ),
             )
         result = {
             "run_id": self.run_id,
@@ -275,6 +362,7 @@ class RunOrchestrator:
             "timings": [t.model_dump() for t in eng.timings],
         }
         svc.db.execute(
-            "UPDATE runs SET status = 'succeeded', result_json = ? WHERE id = ?", (json.dumps(result), self.run_id)
+            "UPDATE runs SET status = 'succeeded', result_json = ? WHERE id = ?",
+            (json.dumps(result), self.run_id),
         )
         return result

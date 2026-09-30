@@ -13,7 +13,10 @@ from archrender.core.schemas.provenance import Assumption
 
 # Documented defaults (metres, degrees, kelvin). Each entry: value, reason.
 DEFAULTS: dict[str, tuple[Any, str]] = {
-    "ceiling_height_m": (2.70, "Typical residential clear height in Türkiye; no section/annotation found."),
+    "ceiling_height_m": (
+        2.70,
+        "Typical residential clear height in Türkiye; no section/annotation found.",
+    ),
     "door_head_m": (2.10, "Standard door head height; no schedule/elevation value found."),
     "window_sill_m": (0.90, "Standard window sill height; no schedule/elevation value found."),
     "window_head_m": (2.10, "Window head aligned with door heads; no value found."),
@@ -21,7 +24,10 @@ DEFAULTS: dict[str, tuple[Any, str]] = {
     "wall_thickness_exterior_m": (0.25, "Typical exterior wall; no drawing evidence."),
     "camera_height_m": (1.30, "Architectural eye-level convention."),
     "camera_focal_mm": (24.0, "24 mm full-frame equivalent interior default."),
-    "sun_datetime_local": ("2026-06-21T15:00:00", "Mid-afternoon on the summer solstice; no brief value."),
+    "sun_datetime_local": (
+        "2026-06-21T15:00:00",
+        "Mid-afternoon on the summer solstice; no brief value.",
+    ),
     "lighting_cct_k": (4000.0, "Neutral white; brief does not specify colour temperature."),
     "skirting_height_m": (0.08, "Common skirting height; no finish schedule value."),
 }

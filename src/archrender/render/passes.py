@@ -83,7 +83,9 @@ def read_passes(exr_path: Path) -> RenderPasses:
     obj = np.rint(_find(ch, "Object Index", "X")).astype(np.uint16)
     mat = np.rint(_find(ch, "Material Index", "X")).astype(np.uint16)
     albedo = np.stack([_find(ch, "Diffuse Color", c) for c in "RGB"], axis=-1)
-    return RenderPasses(depth=depth, normal=normal, object_index=obj, material_index=mat, albedo=albedo)
+    return RenderPasses(
+        depth=depth, normal=normal, object_index=obj, material_index=mat, albedo=albedo
+    )
 
 
 def category_lut(spec: SceneSpec) -> dict[int, str]:
@@ -100,7 +102,9 @@ def category_mask(passes: RenderPasses, spec: SceneSpec, categories: set[str]) -
     return np.isin(passes.object_index, ids)
 
 
-def object_masks(passes: RenderPasses, spec: SceneSpec, element_refs: set[str]) -> dict[str, NDArray[np.bool_]]:
+def object_masks(
+    passes: RenderPasses, spec: SceneSpec, element_refs: set[str]
+) -> dict[str, NDArray[np.bool_]]:
     """Union mask per plan element (e.g. per opening id: frame + glass + leaf)."""
     out: dict[str, NDArray[np.bool_]] = {}
     for o in spec.objects:
@@ -128,13 +132,17 @@ def line_art(passes: RenderPasses, spec: SceneSpec) -> NDArray[np.uint8]:
         za, zb = depth[a], depth[b]
         finite = np.isfinite(za) & np.isfinite(zb)
         with np.errstate(invalid="ignore", divide="ignore"):
-            jump = np.where(finite, np.abs(za - zb) / np.minimum(za, zb), np.isfinite(za) != np.isfinite(zb))
+            jump = np.where(
+                finite, np.abs(za - zb) / np.minimum(za, zb), np.isfinite(za) != np.isfinite(zb)
+            )
         depth_edge = jump > DEPTH_JUMP_REL
         edges[a] |= involved & (id_edge | crease | depth_edge)
     return (edges * 255).astype(np.uint8)
 
 
-def resize_mask_to_width(mask: NDArray[np.uint8] | NDArray[np.bool_], width: int) -> NDArray[np.bool_]:
+def resize_mask_to_width(
+    mask: NDArray[np.uint8] | NDArray[np.bool_], width: int
+) -> NDArray[np.bool_]:
     m = mask.astype(np.uint8)
     h, w = m.shape
     if w == width:

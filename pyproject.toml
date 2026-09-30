@@ -72,7 +72,12 @@ ignore = [
     "S603",   # subprocess calls are deliberate and use argument lists
     "S607",
     "RUF001", "RUF002", "RUF003",  # unicode (Turkish, ×, →) in strings/comments is intended
+    "N818",   # GateWait / LeaseLost are control-flow signals, not errors
+    "PT018",  # composite assertions are fine in tests
 ]
+
+[tool.ruff.lint.pycodestyle]
+max-line-length = 120
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S", "N802"]

@@ -44,7 +44,7 @@ class MockRefiner(_MockBase):
         warm = detail * (1.0 + s * np.array([0.02, 0.0, -0.02], dtype=np.float32))
         rng = np.random.default_rng(req.seed)
         grain = rng.normal(0.0, 0.004, size=base.shape[:2]).astype(np.float32)[..., None] * s
-        return np.clip(warm + grain, 0.0, 1.0).astype(np.float32)
+        return np.asarray(np.clip(warm + grain, 0.0, 1.0), dtype=np.float32)
 
 
 class MockDepthEstimator(_MockBase):

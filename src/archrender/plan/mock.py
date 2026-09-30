@@ -27,7 +27,9 @@ def _room_type(value: RoomType) -> Fact[RoomType]:
     return fact(value, "mock", MOCK_CONF, note="mock plan")
 
 
-def mock_plan(project_id: str, doc_hashes: list[str], *, width: float = 5.0, depth: float = 4.0) -> PlanGraph:
+def mock_plan(
+    project_id: str, doc_hashes: list[str], *, width: float = 5.0, depth: float = 4.0
+) -> PlanGraph:
     """Rectangular room, interior ``width × depth`` m, 0.2 m walls, 2.7 m ceiling."""
     t = 0.2
     h = 2.7

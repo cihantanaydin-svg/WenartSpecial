@@ -156,7 +156,9 @@ def sun_vector(azimuth_deg, elevation_deg, north_angle_deg):
     """Unit vector toward the sun in the plan frame (plan +Y rotated from true north)."""
     plan_az = math.radians(north_angle_deg + azimuth_deg)
     el = math.radians(elevation_deg)
-    return Vector((math.sin(plan_az) * math.cos(el), math.cos(plan_az) * math.cos(el), math.sin(el)))
+    return Vector(
+        (math.sin(plan_az) * math.cos(el), math.cos(plan_az) * math.cos(el), math.sin(el))
+    )
 
 
 def build_scene(spec, package):
@@ -189,9 +191,11 @@ def build_scene(spec, package):
         light.use_temperature = True
         light.temperature = sun["color_k"]
         obj = bpy.data.objects.new("sun", light)
-        obj.rotation_euler = sun_vector(
-            sun["azimuth_deg"], sun["elevation_deg"], spec.get("north_angle_deg", 0.0)
-        ).to_track_quat("Z", "Y").to_euler()
+        obj.rotation_euler = (
+            sun_vector(sun["azimuth_deg"], sun["elevation_deg"], spec.get("north_angle_deg", 0.0))
+            .to_track_quat("Z", "Y")
+            .to_euler()
+        )
         scene.collection.objects.link(obj)
 
     world = bpy.data.worlds.new("world")
@@ -199,8 +203,12 @@ def build_scene(spec, package):
     wspec = spec.get("world", {})
     if world.node_tree is None:
         world.use_nodes = True
-    bg = world.node_tree.nodes.get("Background") or world.node_tree.nodes.new("ShaderNodeBackground")
-    out = world.node_tree.nodes.get("World Output") or world.node_tree.nodes.new("ShaderNodeOutputWorld")
+    bg = world.node_tree.nodes.get("Background") or world.node_tree.nodes.new(
+        "ShaderNodeBackground"
+    )
+    out = world.node_tree.nodes.get("World Output") or world.node_tree.nodes.new(
+        "ShaderNodeOutputWorld"
+    )
     world.node_tree.links.new(bg.outputs["Background"], out.inputs["Surface"])
     kind = wspec.get("kind", "color")
     if kind == "hdri" and wspec.get("hdri_path"):

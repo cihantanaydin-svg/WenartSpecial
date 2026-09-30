@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 from collections import deque
 
 from shapely.geometry import Point, Polygon
@@ -40,7 +41,11 @@ def _rooms(plan: PlanGraph) -> list[ValidationIssue]:
     polys: dict[str, Polygon] = {}
     for r in plan.rooms:
         poly = Polygon([(p.x, p.y) for p in r.polygon], [[(p.x, p.y) for p in h] for h in r.holes])
-        c = poly.representative_point() if not poly.is_empty else Point(r.polygon[0].x, r.polygon[0].y)
+        c = (
+            poly.representative_point()
+            if not poly.is_empty
+            else Point(r.polygon[0].x, r.polygon[0].y)
+        )
         if not poly.is_valid:
             out.append(
                 ValidationIssue(
@@ -181,7 +186,7 @@ def _openings(plan: PlanGraph) -> list[ValidationIssue]:
         by_wall.setdefault(w.id, []).append((off - width / 2, off + width / 2, o.id))
     for wall_id, spans in by_wall.items():
         spans.sort()
-        for (a0, a1, aid), (b0, _b1, bid) in zip(spans, spans[1:], strict=False):
+        for (_a0, a1, aid), (b0, _b1, bid) in itertools.pairwise(spans):
             if b0 - a1 < MIN_OPENING_GAP_M:
                 out.append(
                     ValidationIssue(

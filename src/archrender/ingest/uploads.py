@@ -19,20 +19,28 @@ from archrender.pipeline.services import Services
 
 
 def upload_dir(svc: Services, project_id: str, upload_id: str) -> Path:
-    return safe_join(svc.settings.projects_dir(), check_id(project_id), "uploads", check_id(upload_id))
+    return safe_join(
+        svc.settings.projects_dir(), check_id(project_id), "uploads", check_id(upload_id)
+    )
 
 
-def create_upload(svc: Services, project_id: str, filename: str, size: int, sha256: str, user_id: str) -> dict[str, Any]:
+def create_upload(
+    svc: Services, project_id: str, filename: str, size: int, sha256: str, user_id: str
+) -> dict[str, Any]:
     check_sha256(sha256)
     if size <= 0:
-        raise ArchRenderError(ErrorCode.VALIDATION, "Empty files cannot be uploaded.", "Choose a non-empty file.")
+        raise ArchRenderError(
+            ErrorCode.VALIDATION, "Empty files cannot be uploaded.", "Choose a non-empty file."
+        )
     if size > svc.settings.max_upload_bytes:
         raise ArchRenderError(
             ErrorCode.INGEST_TOO_LARGE,
             f"File is {size / 1e9:.2f} GB; the limit is {svc.settings.max_upload_bytes / 1e9:.2f} GB.",
             "Split the drawing set or zip it with fewer pages per file.",
         )
-    used = svc.db.one("SELECT COALESCE(SUM(size), 0) AS s FROM documents WHERE project_id = ?", (project_id,))
+    used = svc.db.one(
+        "SELECT COALESCE(SUM(size), 0) AS s FROM documents WHERE project_id = ?", (project_id,)
+    )
     if used is not None and used["s"] + size > svc.settings.max_project_bytes:
         raise ArchRenderError(
             ErrorCode.INGEST_TOO_LARGE,
@@ -58,14 +66,24 @@ def _upload_row(svc: Services, upload_id: str) -> Any:
     return row
 
 
-def put_chunk(svc: Services, upload_id: str, index: int, data: bytes, chunk_sha256: str | None) -> dict[str, Any]:
+def put_chunk(
+    svc: Services, upload_id: str, index: int, data: bytes, chunk_sha256: str | None
+) -> dict[str, Any]:
     row = _upload_row(svc, upload_id)
     if row["status"] != "open":
         raise ArchRenderError(ErrorCode.CONFLICT, "Upload is not open.", "Start a new upload.")
     n_chunks = (row["size"] + row["chunk_size"] - 1) // row["chunk_size"]
     if not 0 <= index < n_chunks:
-        raise ArchRenderError(ErrorCode.VALIDATION, f"Chunk index {index} out of range 0..{n_chunks - 1}.", "Check the chunk index.")
-    expected = row["chunk_size"] if index < n_chunks - 1 else row["size"] - row["chunk_size"] * (n_chunks - 1)
+        raise ArchRenderError(
+            ErrorCode.VALIDATION,
+            f"Chunk index {index} out of range 0..{n_chunks - 1}.",
+            "Check the chunk index.",
+        )
+    expected = (
+        row["chunk_size"]
+        if index < n_chunks - 1
+        else row["size"] - row["chunk_size"] * (n_chunks - 1)
+    )
     if len(data) != expected:
         raise ArchRenderError(
             ErrorCode.VALIDATION,
@@ -95,7 +113,12 @@ def put_chunk(svc: Services, upload_id: str, index: int, data: bytes, chunk_sha2
 
 def upload_status(svc: Services, upload_id: str) -> dict[str, Any]:
     row = _upload_row(svc, upload_id)
-    got = [r["idx"] for r in svc.db.query("SELECT idx FROM upload_chunks WHERE upload_id = ? ORDER BY idx", (upload_id,))]
+    got = [
+        r["idx"]
+        for r in svc.db.query(
+            "SELECT idx FROM upload_chunks WHERE upload_id = ? ORDER BY idx", (upload_id,)
+        )
+    ]
     n_chunks = (row["size"] + row["chunk_size"] - 1) // row["chunk_size"]
     return {
         "upload_id": upload_id,
@@ -119,7 +142,9 @@ def complete_upload(svc: Services, upload_id: str, user_id: str) -> str:
             "Resume the upload: GET the upload status and send the missing chunks.",
             context={"missing": st["missing"][:50]},
         )
-    return svc.queue.enqueue(st["project_id"], JobKind.INTAKE, "cpu", {"upload_id": upload_id}, created_by=user_id)
+    return svc.queue.enqueue(
+        st["project_id"], JobKind.INTAKE, "cpu", {"upload_id": upload_id}, created_by=user_id
+    )
 
 
 def run_intake(svc: Services, upload_id: str) -> dict[str, Any]:
@@ -147,7 +172,9 @@ def run_intake(svc: Services, upload_id: str) -> dict[str, Any]:
     detected = detect(assembled)
     check_supported(detected, row["filename"])
     ref = store.put_file(assembled, detected.media_type, row["filename"], move=True)
-    existing = svc.db.one("SELECT id FROM documents WHERE project_id = ? AND sha256 = ?", (project_id, ref.sha256))
+    existing = svc.db.one(
+        "SELECT id FROM documents WHERE project_id = ? AND sha256 = ?", (project_id, ref.sha256)
+    )
     if existing is not None:
         doc_id, dedup = existing["id"], True
     else:
@@ -156,10 +183,27 @@ def run_intake(svc: Services, upload_id: str) -> dict[str, Any]:
             c.execute(
                 "INSERT INTO documents(id, project_id, sha256, filename, kind, media_type, size, meta_json, created_at)"
                 " VALUES (?,?,?,?,?,?,?,?,?)",
-                (doc_id, project_id, ref.sha256, row["filename"], detected.kind, detected.media_type, ref.size,
-                 json.dumps({"upload_id": upload_id}), now_iso()),
+                (
+                    doc_id,
+                    project_id,
+                    ref.sha256,
+                    row["filename"],
+                    detected.kind,
+                    detected.media_type,
+                    ref.size,
+                    json.dumps({"upload_id": upload_id}),
+                    now_iso(),
+                ),
             )
     with svc.db.tx(immediate=True) as c:
-        c.execute("UPDATE uploads SET status = 'complete', document_id = ? WHERE id = ?", (doc_id, upload_id))
+        c.execute(
+            "UPDATE uploads SET status = 'complete', document_id = ? WHERE id = ?",
+            (doc_id, upload_id),
+        )
     shutil.rmtree(d, ignore_errors=True)
-    return {"document_id": doc_id, "kind": detected.kind, "sha256": ref.sha256, "deduplicated": dedup}
+    return {
+        "document_id": doc_id,
+        "kind": detected.kind,
+        "sha256": ref.sha256,
+        "deduplicated": dedup,
+    }

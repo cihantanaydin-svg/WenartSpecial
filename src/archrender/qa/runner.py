@@ -49,7 +49,9 @@ class QAConfig(BaseModel):
 
     @classmethod
     def load(cls, configs_dir: Path) -> QAConfig:
-        return cls.model_validate(yaml.safe_load((configs_dir / "qa.yaml").read_text(encoding="utf-8")))
+        return cls.model_validate(
+            yaml.safe_load((configs_dir / "qa.yaml").read_text(encoding="utf-8"))
+        )
 
 
 @dataclass
@@ -76,13 +78,19 @@ class QAContext:
     segmenter: TextSegmenter
 
     def __post_init__(self) -> None:
-        h, w = self.passes.shape
+        _h, _w = self.passes.shape
         self.gt_edges = resize_mask_to_width(line_art(self.passes, self.spec), self.qa_width)
         self.struct = resize_mask_to_width(
             category_mask(self.passes, self.spec, set(STRUCTURAL_CATEGORIES)), self.qa_width
         )
-        self.glass = resize_mask_to_width(category_mask(self.passes, self.spec, {"glass"}), self.qa_width)
-        opening_ids = {o.element_ref for o in self.spec.objects if o.category in ("glass", "door_leaf") and o.element_ref}
+        self.glass = resize_mask_to_width(
+            category_mask(self.passes, self.spec, {"glass"}), self.qa_width
+        )
+        opening_ids = {
+            o.element_ref
+            for o in self.spec.objects
+            if o.category in ("glass", "door_leaf") and o.element_ref
+        }
         self.opening_masks = {
             k: resize_mask_to_width(v, self.qa_width)
             for k, v in object_masks(self.passes, self.spec, opening_ids).items()
@@ -91,7 +99,9 @@ class QAContext:
         self.gt_depth = _resize_depth(gt_depth, self.gt_edges.shape)
         self.depth_mask = self.struct & np.isfinite(self.gt_depth) & ~self.glass
         self.materials = {
-            m.pass_index: resize_mask_to_width(self.passes.material_index == m.pass_index, self.qa_width)
+            m.pass_index: resize_mask_to_width(
+                self.passes.material_index == m.pass_index, self.qa_width
+            )
             for m in self.spec.materials
         }
 
@@ -107,7 +117,9 @@ class QAContext:
     def _openings(self, img: Img) -> tuple[dict[str, float], int]:
         inst = self.segmenter.segment(img, OPENING_PROMPTS)
         preds = [
-            resize_mask_to_width(i.mask, self.qa_width) if i.mask.shape[1] != self.qa_width else i.mask
+            resize_mask_to_width(i.mask, self.qa_width)
+            if i.mask.shape[1] != self.qa_width
+            else i.mask
             for i in inst
         ]
         matches, extra = g.match_openings(self.opening_masks, preds)
@@ -183,7 +195,9 @@ class QAContext:
             CheckResult(
                 name="openings",
                 family="geometry",
-                passed=worst <= c.geometry.opening_iou_drop_max and new_missing == 0 and new_extra == 0,
+                passed=worst <= c.geometry.opening_iou_drop_max
+                and new_missing == 0
+                and new_extra == 0,
                 value=float(new_missing + new_extra),
                 delta=worst,
                 threshold=c.geometry.opening_iou_drop_max,

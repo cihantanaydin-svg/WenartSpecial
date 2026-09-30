@@ -115,10 +115,14 @@ class SceneCompiler:
                 material_ids.append(sm.material_id)
             return sm.material_id
 
-        def add(obj_id: str, category: ObjectCategory, mesh: TriMesh, material: str, ref: str | None) -> None:
+        def add(
+            obj_id: str, category: ObjectCategory, mesh: TriMesh, material: str, ref: str | None
+        ) -> None:
             if mesh.triangles == 0:
                 raise ArchRenderError(
-                    ErrorCode.SCENE_INVALID, f"Object {obj_id} has no geometry.", "Check the plan element."
+                    ErrorCode.SCENE_INVALID,
+                    f"Object {obj_id} has no geometry.",
+                    "Check the plan element.",
                 )
             watertight = is_watertight(mesh)
             v, f, uv = box_uv(mesh)
@@ -130,7 +134,10 @@ class SceneCompiler:
                     id=obj_id,
                     category=category,
                     mesh=MeshFile(
-                        path=path, sha256=sha256_bytes(blob), triangles=mesh.triangles, watertight=watertight
+                        path=path,
+                        sha256=sha256_bytes(blob),
+                        triangles=mesh.triangles,
+                        watertight=watertight,
                     ),
                     material=material,
                     pass_index=len(objects) + 1,
@@ -143,20 +150,28 @@ class SceneCompiler:
         for w in walls:
             base = w.base_offset_m
             solid = extrude(pieces[w.id], base, base + w.height_m.value)
-            for oid, cutter in cutters.items():
+            for _oid, cutter in cutters.items():
                 bmin, bmax = _bbox(cutter)
                 if pieces[w.id].intersects(Polygon.from_bounds(bmin[0], bmin[1], bmax[0], bmax[1])):
                     solid = solid - cutter
             check_manifold(solid, f"wall {w.id}")
-            add(f"wall_{w.id}", "wall", to_trimesh(solid), material_for(f"wall:{w.id}", "walls"), w.id)
+            add(
+                f"wall_{w.id}",
+                "wall",
+                to_trimesh(solid),
+                material_for(f"wall:{w.id}", "walls"),
+                w.id,
+            )
 
         # opening infill: frames, leaves, glazing
         for o in openings:
             host = plan.wall(o.host_wall)
             for suffix, category, mesh in _opening_parts(host, o):
-                surface = {"opening_frame": "opening_frame", "door_leaf": "door_leaf", "glass": "glass"}[
-                    category
-                ]
+                surface = {
+                    "opening_frame": "opening_frame",
+                    "door_leaf": "door_leaf",
+                    "glass": "glass",
+                }[category]
                 add(f"{o.id}_{suffix}", category, mesh, material_for(surface, surface), o.id)
 
         # floor / ceiling slabs per room (extend under the walls to avoid light leaks)
@@ -167,7 +182,13 @@ class SceneCompiler:
             grow = (max(adjacent) / 2.0) if adjacent else 0.0
             ext = poly.buffer(grow, join_style="mitre") if grow > 0 else poly
             h = room.ceiling_height_m.value
-            add(f"floor_{rid}", "floor", slab(ext, -SLAB_THICKNESS_M, 0.0, f"floor {rid}"), material_for(f"floor:{rid}", "floor"), rid)
+            add(
+                f"floor_{rid}",
+                "floor",
+                slab(ext, -SLAB_THICKNESS_M, 0.0, f"floor {rid}"),
+                material_for(f"floor:{rid}", "floor"),
+                rid,
+            )
             add(
                 f"ceiling_{rid}",
                 "ceiling",
@@ -193,8 +214,16 @@ class SceneCompiler:
                     license=lib.license,
                 )
             )
-        sun_az = float(register.use("sun_azimuth_deg", 225.0, "Phase-1 skeleton: fixed sun (SW); pvlib ephemeris arrives in Phase 4."))
-        sun_el = float(register.use("sun_elevation_deg", 35.0, "Phase-1 skeleton: fixed sun elevation."))
+        sun_az = float(
+            register.use(
+                "sun_azimuth_deg",
+                225.0,
+                "Phase-1 skeleton: fixed sun (SW); pvlib ephemeris arrives in Phase 4.",
+            )
+        )
+        sun_el = float(
+            register.use("sun_elevation_deg", 35.0, "Phase-1 skeleton: fixed sun elevation.")
+        )
         spec = SceneSpec(
             scene_id=scene_id,
             north_angle_deg=plan.north_angle_deg.value,
@@ -215,7 +244,14 @@ def _bbox(m: Manifold) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _ring(
-    center: np.ndarray, d: np.ndarray, w: float, depth: float, z0: float, z1: float, profile: float, open_bottom: bool
+    center: np.ndarray,
+    d: np.ndarray,
+    w: float,
+    depth: float,
+    z0: float,
+    z1: float,
+    profile: float,
+    open_bottom: bool,
 ) -> TriMesh:
     outer = oriented_box(center, d, w, depth, z0, z1)
     inner_z0 = z0 - 0.01 if open_bottom else z0 + profile
@@ -232,7 +268,11 @@ def _opening_parts(wall: Wall, o: Opening) -> list[tuple[str, ObjectCategory, Tr
     parts: list[tuple[str, ObjectCategory, TriMesh]] = []
     if o.type == "window":
         parts.append(
-            ("frame", "opening_frame", _ring(c, d, w, WINDOW_FRAME_DEPTH_M, sill, sill + h, FRAME_PROFILE_M, False))
+            (
+                "frame",
+                "opening_frame",
+                _ring(c, d, w, WINDOW_FRAME_DEPTH_M, sill, sill + h, FRAME_PROFILE_M, False),
+            )
         )
         glass = oriented_box(
             c,
@@ -246,8 +286,12 @@ def _opening_parts(wall: Wall, o: Opening) -> list[tuple[str, ObjectCategory, Tr
         parts.append(("glass", "glass", to_trimesh(glass)))
     elif o.type in ("door", "double_door", "french_door", "sliding_door"):
         profile = 0.04
-        parts.append(("frame", "opening_frame", _ring(c, d, w, DOOR_FRAME_DEPTH_M, 0.0, h, profile, True)))
-        leaf = oriented_box(c, d, w - 2 * profile - 0.004, DOOR_LEAF_THICKNESS_M, 0.005, h - profile - 0.002)
+        parts.append(
+            ("frame", "opening_frame", _ring(c, d, w, DOOR_FRAME_DEPTH_M, 0.0, h, profile, True))
+        )
+        leaf = oriented_box(
+            c, d, w - 2 * profile - 0.004, DOOR_LEAF_THICKNESS_M, 0.005, h - profile - 0.002
+        )
         check_manifold(leaf, "door leaf")
         parts.append(("leaf", "door_leaf", to_trimesh(leaf)))
     return parts

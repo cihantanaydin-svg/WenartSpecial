@@ -196,7 +196,10 @@ class JobQueue:
                 (max(0.0, min(1.0, progress)), stage, job_id),
             )
             self._emit(
-                c, job_id, "progress", {"progress": round(progress, 4), "stage": stage, "message": message}
+                c,
+                job_id,
+                "progress",
+                {"progress": round(progress, 4), "stage": stage, "message": message},
             )
 
     def emit(self, job_id: str, type_: str, data: dict[str, Any]) -> None:

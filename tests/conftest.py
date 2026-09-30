@@ -61,7 +61,9 @@ def project_id(db: Database) -> str:
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     s = Settings(
-        blender_mode="module" if (REPO_ROOT / ".venv-blender" / "bin" / "python").exists() else "binary"
+        blender_mode="module"
+        if (REPO_ROOT / ".venv-blender" / "bin" / "python").exists()
+        else "binary"
     )
     if not blender_available(s):
         skip = pytest.mark.skip(reason="no Blender runtime (run `make setup-blender`)")

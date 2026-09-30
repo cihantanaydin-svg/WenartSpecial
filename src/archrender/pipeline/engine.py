@@ -77,7 +77,9 @@ class StageEngine:
             }
         )
 
-    def run[I: BaseModel, O: BaseModel](self, stage: StageDef[I, O], inp: I, ctx: StageContext) -> O:
+    def run[I: BaseModel, O: BaseModel](
+        self, stage: StageDef[I, O], inp: I, ctx: StageContext
+    ) -> O:
         key = self.cache_key(stage, inp)
         row = self.db.one(
             "SELECT output_json FROM stage_runs WHERE project_id = ? AND cache_key = ?",
@@ -86,9 +88,14 @@ class StageEngine:
         if row is not None:
             out = stage.output.model_validate_json(row["output_json"])
             if all(ctx.store.exists(r.sha256) for r in iter_cas_refs(out)):
-                self.timings.append(StageTiming(stage=stage.id, key=key[:16], cached=True, seconds=0.0))
+                self.timings.append(
+                    StageTiming(stage=stage.id, key=key[:16], cached=True, seconds=0.0)
+                )
                 return out
-            log.warning("cache entry references missing blobs; recomputing", extra={"fields": {"stage": stage.id}})
+            log.warning(
+                "cache entry references missing blobs; recomputing",
+                extra={"fields": {"stage": stage.id}},
+            )
         bind(stage=stage.id)
         t0 = time.time()
         try:
@@ -115,5 +122,7 @@ class StageEngine:
                     seconds,
                 ),
             )
-        self.timings.append(StageTiming(stage=stage.id, key=key[:16], cached=False, seconds=round(seconds, 3)))
+        self.timings.append(
+            StageTiming(stage=stage.id, key=key[:16], cached=False, seconds=round(seconds, 3))
+        )
         return out

@@ -19,7 +19,9 @@ def default_brief(section_id: str, register: AssumptionRegister) -> DesignBrief:
     floor = register.use(
         "floor_material", "oak_floor_natural", "No finish schedule or brief: neutral oak floor."
     )
-    walls = register.use("wall_material", "paint_warm_white", "No finish schedule: warm white paint.")
+    walls = register.use(
+        "wall_material", "paint_warm_white", "No finish schedule: warm white paint."
+    )
     ceiling = register.use(
         "ceiling_material", "paint_ceiling_white", "No finish schedule: white ceiling paint."
     )

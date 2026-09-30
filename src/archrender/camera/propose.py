@@ -48,12 +48,17 @@ def _floor_samples(poly: Polygon) -> np.ndarray:
     grid = np.array([(x, y) for x in xs for y in ys])
     pp = prep(poly)
     inside = np.array([pp.contains(Point(p)) for p in grid], dtype=bool)
-    return grid[inside]
+    return np.asarray(grid[inside])
 
 
 def visible_floor_fraction(
-    poly: Polygon, samples: np.ndarray, pos: tuple[float, float], yaw_deg: float, hfov_deg: float,
-    vfov_deg: float, eye_h: float,
+    poly: Polygon,
+    samples: np.ndarray,
+    pos: tuple[float, float],
+    yaw_deg: float,
+    hfov_deg: float,
+    vfov_deg: float,
+    eye_h: float,
 ) -> float:
     if len(samples) == 0:
         return 0.0
@@ -71,7 +76,9 @@ def visible_floor_fraction(
     return float(vis / len(samples))
 
 
-def _candidates(plan: PlanGraph, room_id: str, poly: Polygon) -> list[tuple[tuple[float, float], str]]:
+def _candidates(
+    plan: PlanGraph, room_id: str, poly: Polygon
+) -> list[tuple[tuple[float, float], str]]:
     out: list[tuple[tuple[float, float], str]] = []
     ring = list(poly.exterior.coords)[:-1]
     n = len(ring)
@@ -148,13 +155,17 @@ def propose_cameras(
             "No valid camera position found (rooms too small for the clearance rule).",
             "Place cameras manually at Gate C or check the room boundaries.",
         )
-    scored.sort(key=lambda s: (-s.score, s.camera.position.x, s.camera.position.y, s.camera.yaw_deg))
+    scored.sort(
+        key=lambda s: (-s.score, s.camera.position.x, s.camera.position.y, s.camera.yaw_deg)
+    )
     chosen: list[ScoredCamera] = []
     for s in scored:
         if len(chosen) >= n_views:
             break
         if any(
-            math.hypot(s.camera.position.x - c.camera.position.x, s.camera.position.y - c.camera.position.y)
+            math.hypot(
+                s.camera.position.x - c.camera.position.x, s.camera.position.y - c.camera.position.y
+            )
             < NMS_DIST_M
             and _angle_diff(s.camera.yaw_deg, c.camera.yaw_deg) < NMS_YAW_DEG
             for c in chosen
@@ -163,7 +174,11 @@ def propose_cameras(
         chosen.append(s)
     return [
         ScoredCamera(
-            s.camera.model_copy(update={"id": f"cam_{i + 1}"}), s.score, s.visible_floor_fraction, s.room_id, s.origin
+            s.camera.model_copy(update={"id": f"cam_{i + 1}"}),
+            s.score,
+            s.visible_floor_fraction,
+            s.room_id,
+            s.origin,
         )
         for i, s in enumerate(chosen)
     ]

@@ -29,10 +29,14 @@ class Gates:
         self.policy = policy
 
     def status(self, gate: GateName) -> GateStatus | None:
-        row = self.db.one("SELECT status FROM gates WHERE run_id = ? AND gate = ?", (self.run_id, gate.value))
+        row = self.db.one(
+            "SELECT status FROM gates WHERE run_id = ? AND gate = ?", (self.run_id, gate.value)
+        )
         return GateStatus(row["status"]) if row else None
 
-    def check(self, gate: GateName, *, auto_ok: bool, evidence: dict[str, Any], mandatory: bool = False) -> GateStatus:
+    def check(
+        self, gate: GateName, *, auto_ok: bool, evidence: dict[str, Any], mandatory: bool = False
+    ) -> GateStatus:
         """Pass, auto-pass, or raise :class:`GateWait` / GATE_REJECTED."""
         current = self.status(gate)
         if current in (GateStatus.APPROVED, GateStatus.AUTO_PASSED):
@@ -50,15 +54,23 @@ class Gates:
             c.execute(
                 "INSERT OR REPLACE INTO gates(run_id, gate, status, policy, evidence_json, decided_at)"
                 " VALUES (?,?,?,?,?,?)",
-                (self.run_id, gate.value, status.value, policy, json.dumps(evidence, default=str),
-                 now_iso() if auto else None),
+                (
+                    self.run_id,
+                    gate.value,
+                    status.value,
+                    policy,
+                    json.dumps(evidence, default=str),
+                    now_iso() if auto else None,
+                ),
             )
         if not auto:
             raise GateWait(gate, evidence)
         return status
 
 
-def decide(db: Database, run_id: str, gate: str, *, approve: bool, user_id: str, notes: str | None) -> None:
+def decide(
+    db: Database, run_id: str, gate: str, *, approve: bool, user_id: str, notes: str | None
+) -> None:
     row = db.one("SELECT status FROM gates WHERE run_id = ? AND gate = ?", (run_id, gate))
     if row is None:
         raise not_found("Gate", f"{run_id}/{gate}")

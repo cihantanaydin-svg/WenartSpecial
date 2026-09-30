@@ -13,7 +13,11 @@ _TEMPLATE_NAME = "faithful_v1.j2"
 
 
 def _template_text() -> str:
-    return resources.files("archrender.refine").joinpath("templates", _TEMPLATE_NAME).read_text("utf-8")
+    return (
+        resources.files("archrender.refine")
+        .joinpath("templates", _TEMPLATE_NAME)
+        .read_text("utf-8")
+    )
 
 
 def compile_prompt(brief: DesignBrief, materials: dict[str, str]) -> tuple[str, str]:

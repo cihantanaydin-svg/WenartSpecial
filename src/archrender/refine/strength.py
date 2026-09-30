@@ -14,7 +14,12 @@ FloatMap = NDArray[np.float32]
 
 
 def strength_map(
-    passes: RenderPasses, spec: SceneSpec, profile: RefineProfile, *, scale: float = 1.0, decor_enabled: bool = False
+    passes: RenderPasses,
+    spec: SceneSpec,
+    profile: RefineProfile,
+    *,
+    scale: float = 1.0,
+    decor_enabled: bool = False,
 ) -> FloatMap:
     """Structural low, furniture moderate, decor-allowed higher (only if optional decor is on).
 
@@ -28,8 +33,8 @@ def strength_map(
         decor = category_mask(passes, spec, {"decor"})
         s[decor] = profile.strength_decor
     # soften transitions by a few pixels so latent blending has no hard steps
-    s = cv2.GaussianBlur(s, (0, 0), max(1.0, passes.shape[1] / 1024))
-    return np.clip(s * scale, 0.0, 1.0).astype(np.float32)
+    blurred = cv2.GaussianBlur(s, (0, 0), max(1.0, passes.shape[1] / 1024))
+    return np.asarray(np.clip(blurred * scale, 0.0, 1.0), dtype=np.float32)
 
 
 def hard_structural_composite(

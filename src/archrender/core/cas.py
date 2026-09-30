@@ -104,7 +104,10 @@ class ProjectStore:
         return CasRef(sha256=sha, size=size, media_type=media_type, name=name)
 
     def put_stream(
-        self, stream: BinaryIO, media_type: str = "application/octet-stream", name: str | None = None
+        self,
+        stream: BinaryIO,
+        media_type: str = "application/octet-stream",
+        name: str | None = None,
     ) -> CasRef:
         fd, tmp_name = tempfile.mkstemp(dir=self.tmp_dir)
         with os.fdopen(fd, "wb") as fh:

@@ -43,7 +43,7 @@ def centerline_coords(wall: Wall, arc_segments: int = 48) -> list[tuple[float, f
     if isinstance(cl, Segment):
         return [(cl.a.x, cl.a.y), (cl.b.x, cl.b.y)]
     sweep = (cl.end_deg - cl.start_deg) % 360.0 or 360.0
-    n = max(4, int(math.ceil(arc_segments * sweep / 360.0)))
+    n = max(4, math.ceil(arc_segments * sweep / 360.0))
     return [
         (
             cl.center.x + cl.radius * math.cos(math.radians(cl.start_deg + sweep * i / n)),
@@ -111,12 +111,16 @@ def polygon_to_cross_section(poly: Polygon) -> CrossSection:
     """manifold3d wants counter-clockwise outer rings and clockwise holes (shapely ``orient``)."""
     poly = orient(poly, sign=1.0)
     rings = [list(poly.exterior.coords)[:-1]] + [list(r.coords)[:-1] for r in poly.interiors]
-    return CrossSection([[(float(x), float(y)) for x, y in ring] for ring in rings], FillRule.EvenOdd)
+    return CrossSection(
+        [[(float(x), float(y)) for x, y in ring] for ring in rings], FillRule.EvenOdd
+    )
 
 
 def extrude(poly: Polygon, z0: float, z1: float) -> Manifold:
     if z1 <= z0:
-        raise ArchRenderError(ErrorCode.SCENE_INVALID, "Extrusion height must be positive.", "Check heights.")
+        raise ArchRenderError(
+            ErrorCode.SCENE_INVALID, "Extrusion height must be positive.", "Check heights."
+        )
     return Manifold.extrude(polygon_to_cross_section(poly), z1 - z0).translate((0.0, 0.0, z0))
 
 
@@ -133,7 +137,9 @@ def wall_frame(wall: Wall) -> tuple[np.ndarray, np.ndarray, float]:
     b = np.array([cl.b.x, cl.b.y])
     length = float(np.linalg.norm(b - a))
     if length < EPS:
-        raise ArchRenderError(ErrorCode.PLAN_INVALID, f"Wall {wall.id} has zero length.", "Delete it.")
+        raise ArchRenderError(
+            ErrorCode.PLAN_INVALID, f"Wall {wall.id} has zero length.", "Delete it."
+        )
     return a, (b - a) / length, length
 
 

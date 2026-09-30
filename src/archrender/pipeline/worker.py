@@ -86,20 +86,31 @@ class Worker:
             q.complete(job.id, self.name, result)
         except GateWait as gw:
             q.park_at_gate(job.id, self.name, gw.gate.value, gw.evidence)
-            self.svc.db.execute("UPDATE runs SET status = 'waiting_gate' WHERE job_id = ?", (job.id,))
+            self.svc.db.execute(
+                "UPDATE runs SET status = 'waiting_gate' WHERE job_id = ?", (job.id,)
+            )
         except LeaseLost:
             log.warning("lease lost; abandoning job")
         except ArchRenderError as e:
             if e.code == ErrorCode.JOB_CANCELLED or hb.lost.is_set():
                 q.fail(job.id, self.name, e.to_info(), retry=False)
             else:
-                log.error("job failed", extra={"fields": {"code": e.code.value, "error": e.message}})
+                log.error(
+                    "job failed", extra={"fields": {"code": e.code.value, "error": e.message}}
+                )
                 q.fail(job.id, self.name, e.to_info(), retry=e.retryable)
             self._mark_run_failed(job)
         except InterruptedError:
-            q.fail(job.id, self.name, ErrorInfo(code=ErrorCode.JOB_CANCELLED, message="Cancelled.", fix_hint="Start a new run."), retry=False)
+            q.fail(
+                job.id,
+                self.name,
+                ErrorInfo(
+                    code=ErrorCode.JOB_CANCELLED, message="Cancelled.", fix_hint="Start a new run."
+                ),
+                retry=False,
+            )
             self._mark_run_failed(job)
-        except Exception as e:  # noqa: BLE001 - last-resort guard: record a loud, actionable failure
+        except Exception as e:
             log.exception("unexpected worker error")
             q.fail(
                 job.id,
@@ -127,7 +138,9 @@ class Worker:
 
         def progress(fraction: float, message: str) -> None:
             if cancelled():
-                raise ArchRenderError(ErrorCode.JOB_CANCELLED, "The job was cancelled.", "Start a new run when ready.")
+                raise ArchRenderError(
+                    ErrorCode.JOB_CANCELLED, "The job was cancelled.", "Start a new run when ready."
+                )
             self.svc.queue.progress(job.id, fraction, message.split(" ", 1)[0], message)
 
         if job.kind == JobKind.INTAKE:
@@ -141,7 +154,9 @@ class Worker:
             )
             return RunOrchestrator(self.svc, job.id, str(job.payload["run_id"]), ctx).execute()
         raise ArchRenderError(
-            ErrorCode.VALIDATION, f"Unknown job kind {job.kind}.", "Upgrade the worker to match the API version."
+            ErrorCode.VALIDATION,
+            f"Unknown job kind {job.kind}.",
+            "Upgrade the worker to match the API version.",
         )
 
 

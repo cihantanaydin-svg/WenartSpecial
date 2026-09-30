@@ -28,18 +28,22 @@ def room_plans(draw: st.DrawFn) -> PlanGraph:
     depth = draw(st.floats(2.5, 7.0))
     thickness = draw(st.floats(0.1, 0.4))
     base = mock_plan("prj_p", [], width=width, depth=depth)
-    walls = [
-        w.model_copy(update={"thickness_m": fact(thickness, "mock", 1.0)}) for w in base.walls
-    ]
+    walls = [w.model_copy(update={"thickness_m": fact(thickness, "mock", 1.0)}) for w in base.walls]
     # rebuild centerlines for the chosen thickness
     t = thickness
     x0, y0, x1, y1 = -t / 2, -t / 2, width + t / 2, depth + t / 2
     corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
     walls = [
         Wall(
-            id=w.id, level="L0",
-            centerline=Segment(a=Point2(x=corners[i][0], y=corners[i][1]), b=Point2(x=corners[(i + 1) % 4][0], y=corners[(i + 1) % 4][1])),
-            thickness_m=fact(t, "mock", 1.0), height_m=w.height_m, kind="exterior",
+            id=w.id,
+            level="L0",
+            centerline=Segment(
+                a=Point2(x=corners[i][0], y=corners[i][1]),
+                b=Point2(x=corners[(i + 1) % 4][0], y=corners[(i + 1) % 4][1]),
+            ),
+            thickness_m=fact(t, "mock", 1.0),
+            height_m=w.height_m,
+            kind="exterior",
         )
         for i, w in enumerate(walls)
     ]
@@ -55,7 +59,9 @@ def room_plans(draw: st.DrawFn) -> PlanGraph:
             is_door = draw(st.booleans())
             openings.append(
                 Opening(
-                    id=f"O{i}{k}", host_wall=w.id, offset_m=fact(center, "mock", 1.0),
+                    id=f"O{i}{k}",
+                    host_wall=w.id,
+                    offset_m=fact(center, "mock", 1.0),
                     width_m=fact(width_o, "mock", 1.0),
                     height_m=fact(2.1 if is_door else 1.2, "mock", 1.0),
                     sill_m=fact(0.0 if is_door else 0.9, "mock", 1.0),
@@ -73,7 +79,12 @@ def test_random_rooms_compile_watertight(plan: PlanGraph) -> None:
     reg = AssumptionRegister("test")
     section = Section(id="s", level="L0", kind="rooms", room_ids=["R1"])
     compiled = SceneCompiler(LIB).compile(
-        plan, section, default_brief("s", reg), RenderSettings(width=64, height=36), reg, scene_id="scn"
+        plan,
+        section,
+        default_brief("s", reg),
+        RenderSettings(width=64, height=36),
+        reg,
+        scene_id="scn",
     )
     assert compiled.spec.objects
     for obj in compiled.spec.objects:

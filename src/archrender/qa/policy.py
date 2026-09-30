@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Literal
 
 import numpy as np
 
@@ -32,7 +33,9 @@ class ViewPolicyResult:
 
 
 def _rank_key(c: CandidateQA) -> tuple[float, int]:
-    edge = next((x.delta for x in c.checks if x.name == "structural_edge_f" and x.delta is not None), 0.0)
+    edge = next(
+        (x.delta for x in c.checks if x.name == "structural_edge_f" and x.delta is not None), 0.0
+    )
     return (edge, c.seed)
 
 
@@ -84,9 +87,20 @@ def run_view_policy(
         passing = [c for c in current if c.passed]
         if passing:
             best = sorted(passing, key=_rank_key)[0]
-            log.append(f"attempt {retry}: {len(passing)}/{len(current)} candidates passed; chose {best.candidate_id}")
-            return _result(view_id, camera_id, "refined", best.image_sha256, base_sha, attempts,
-                           f"Refined candidate {best.candidate_id} passed all QA checks.", images[best.candidate_id], log)
+            log.append(
+                f"attempt {retry}: {len(passing)}/{len(current)} candidates passed; chose {best.candidate_id}"
+            )
+            return _result(
+                view_id,
+                camera_id,
+                "refined",
+                best.image_sha256,
+                base_sha,
+                attempts,
+                f"Refined candidate {best.candidate_id} passed all QA checks.",
+                images[best.candidate_id],
+                log,
+            )
         failed_names = sorted({x.name for c in current for x in c.checks if not x.passed})
         log.append(f"attempt {retry}: all candidates failed ({', '.join(failed_names)})")
         if retry >= profile.max_retries:
@@ -118,23 +132,47 @@ def run_view_policy(
     attempts.append(hc)
     if hc.passed:
         log.append("hard structural composite passed QA")
-        return _result(view_id, camera_id, "hard_composite", sha, base_sha, attempts,
-                       "Refinement drifted; delivered the hard structural composite (Cycles structure).",
-                       composite, log)
+        return _result(
+            view_id,
+            camera_id,
+            "hard_composite",
+            sha,
+            base_sha,
+            attempts,
+            "Refinement drifted; delivered the hard structural composite (Cycles structure).",
+            composite,
+            log,
+        )
     log.append("hard structural composite failed; falling back to the Cycles render")
-    return _result(view_id, camera_id, "fallback_base", base_sha, base_sha, attempts,
-                   "All refinement attempts failed QA; delivered the unrefined Cycles render.", base, log)
+    return _result(
+        view_id,
+        camera_id,
+        "fallback_base",
+        base_sha,
+        base_sha,
+        attempts,
+        "All refinement attempts failed QA; delivered the unrefined Cycles render.",
+        base,
+        log,
+    )
 
 
 def _result(
-    view_id: str, camera_id: str, status: str, delivered_sha: str, base_sha: str,
-    attempts: list[CandidateQA], reason: str, img: Img, log: list[str],
+    view_id: str,
+    camera_id: str,
+    status: Literal["refined", "fallback_base", "hard_composite", "needs_review"],
+    delivered_sha: str,
+    base_sha: str,
+    attempts: list[CandidateQA],
+    reason: str,
+    img: Img,
+    log: list[str],
 ) -> ViewPolicyResult:
     uses_mocks = any(c.uses_mocks for c in attempts)
     outcome = ViewOutcome(
         view_id=view_id,
         camera_id=camera_id,
-        status=status,  # type: ignore[arg-type]
+        status=status,
         delivered_sha256=delivered_sha,
         base_sha256=base_sha,
         attempts=attempts,

@@ -26,17 +26,25 @@ def _zip_kind(path: Path) -> Detected:
             names = set(zf.namelist()[:5000])
     except zipfile.BadZipFile as e:
         raise ArchRenderError(
-            ErrorCode.INGEST_UNSUPPORTED_TYPE, "Corrupt ZIP container.", "Re-export or re-zip the file."
+            ErrorCode.INGEST_UNSUPPORTED_TYPE,
+            "Corrupt ZIP container.",
+            "Re-export or re-zip the file.",
         ) from e
     if "[Content_Types].xml" in names:
         if any(n.startswith("word/") for n in names):
-            return Detected("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            return Detected(
+                "docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
         if any(n.startswith("xl/") for n in names):
             if "xl/vbaProject.bin" in names:
                 return Detected("xlsx_macro", "application/vnd.ms-excel.sheet.macroEnabled.12")
-            return Detected("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            return Detected(
+                "xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
         if any(n.startswith("ppt/") for n in names):
-            return Detected("pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+            return Detected(
+                "pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            )
     return Detected("zip", "application/zip")
 
 
@@ -54,7 +62,15 @@ def detect(path: Path) -> Detected:
         return Detected("webp", "image/webp")
     if head[:4] in (b"II*\x00", b"MM\x00*"):
         return Detected("tiff", "image/tiff")
-    if head[4:8] == b"ftyp" and head[8:12] in (b"heic", b"heix", b"mif1", b"msf1", b"heim", b"heis", b"hevc"):
+    if head[4:8] == b"ftyp" and head[8:12] in (
+        b"heic",
+        b"heix",
+        b"mif1",
+        b"msf1",
+        b"heim",
+        b"heis",
+        b"hevc",
+    ):
         return Detected("heic", "image/heic")
     if head[:2] == b"PK":
         return _zip_kind(path)
@@ -67,10 +83,16 @@ def detect(path: Path) -> Detected:
     if head.startswith(b"3D Geometry File Format"):
         return Detected("3dm", "model/vnd.3dm")
     if head[:8] == _OLE:
-        if b"B\x00a\x00s\x00i\x00c\x00F\x00i\x00l\x00e\x00I\x00n\x00f\x00o" in head or b"Revit" in head:
+        if (
+            b"B\x00a\x00s\x00i\x00c\x00F\x00i\x00l\x00e\x00I\x00n\x00f\x00o" in head
+            or b"Revit" in head
+        ):
             return Detected("rvt", "application/vnd.autodesk.revit")
         return Detected("ole", "application/x-ole-storage")
-    if head.startswith(b"\xff\xfe\xff\x0eSketchUp Model") or b"S\x00k\x00e\x00t\x00c\x00h\x00U\x00p\x00" in head[:64]:
+    if (
+        head.startswith(b"\xff\xfe\xff\x0eSketchUp Model")
+        or b"S\x00k\x00e\x00t\x00c\x00h\x00U\x00p\x00" in head[:64]
+    ):
         return Detected("skp", "application/vnd.sketchup.skp")
     try:
         text = text_head.decode("utf-8")
@@ -78,9 +100,12 @@ def detect(path: Path) -> Detected:
         text = None
     if text is not None:
         stripped = text.lstrip()
-        if stripped.startswith("0\n") or stripped.startswith("0\r\n") or stripped[:40].replace("\r", "").startswith("  0\nSECTION"):
-            if "SECTION" in text[:200]:
-                return Detected("dxf", "image/vnd.dxf")
+        if (
+            stripped.startswith("0\n")
+            or stripped.startswith("0\r\n")
+            or stripped[:40].replace("\r", "").startswith("  0\nSECTION")
+        ) and "SECTION" in text[:200]:
+            return Detected("dxf", "image/vnd.dxf")
         low = stripped[:512].lower()
         if low.startswith("<?xml") or low.startswith("<svg"):
             if "<svg" in stripped[:4096].lower():
@@ -97,8 +122,23 @@ def detect(path: Path) -> Detected:
 
 
 SUPPORTED = {
-    "pdf", "dxf", "dwg", "ifc", "svg", "3dm", "png", "jpeg", "webp", "tiff", "heic",
-    "zip", "docx", "xlsx", "pptx", "txt", "md",
+    "pdf",
+    "dxf",
+    "dwg",
+    "ifc",
+    "svg",
+    "3dm",
+    "png",
+    "jpeg",
+    "webp",
+    "tiff",
+    "heic",
+    "zip",
+    "docx",
+    "xlsx",
+    "pptx",
+    "txt",
+    "md",
 }
 
 

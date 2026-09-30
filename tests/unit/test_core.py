@@ -60,4 +60,6 @@ def test_cas_roundtrip_dedupe_and_isolation(tmp_path: Path) -> None:
 def test_redaction() -> None:
     line = "key ark_abc123_SECRETsecret hf_abcdefghijklmnop Bearer xyz.token ghp_abcdefghijk1234"
     out = redact(line)
-    assert "SECRET" not in out and "hf_abc" not in out and "xyz.token" not in out and "ghp_" not in out
+    assert (
+        "SECRET" not in out and "hf_abc" not in out and "xyz.token" not in out and "ghp_" not in out
+    )

@@ -41,9 +41,21 @@ def test_skeleton_end_to_end_with_gates_and_cache(svc: Services, project_id: str
     worker.run_until_idle()
     job = svc.queue.get(job_id)
     assert job.status == JobStatus.WAITING_GATE, job.error
-    gates = {r["gate"]: r["status"] for r in svc.db.query("SELECT gate, status FROM gates WHERE run_id = ?", (run_id,))}
-    assert gates == {"A_plan": "auto_passed", "B_brief": "auto_passed", "C_cameras": "auto_passed", "D_final": "pending"}
-    evidence = json.loads(svc.db.one("SELECT evidence_json FROM gates WHERE run_id = ? AND gate = 'D_final'", (run_id,))["evidence_json"])
+    gates = {
+        r["gate"]: r["status"]
+        for r in svc.db.query("SELECT gate, status FROM gates WHERE run_id = ?", (run_id,))
+    }
+    assert gates == {
+        "A_plan": "auto_passed",
+        "B_brief": "auto_passed",
+        "C_cameras": "auto_passed",
+        "D_final": "pending",
+    }
+    evidence = json.loads(
+        svc.db.one(
+            "SELECT evidence_json FROM gates WHERE run_id = ? AND gate = 'D_final'", (run_id,)
+        )["evidence_json"]
+    )
     assert "brief" in evidence["families_not_covered_by_real_models"]
 
     decide(svc.db, run_id, "D_final", approve=True, user_id="usr_test", notes="plumbing test")
@@ -66,7 +78,12 @@ def test_skeleton_end_to_end_with_gates_and_cache(svc: Services, project_id: str
     zdata = store.read_bytes(store_ref(result["bundle"]))
     with zipfile.ZipFile(io.BytesIO(zdata)) as zf:
         names = set(zf.namelist())
-        assert {"model/scene.glb", "plan/plan.json", "qa/qa_report.html", "manifests/run_manifest.json"} <= names
+        assert {
+            "model/scene.glb",
+            "plan/plan.json",
+            "qa/qa_report.html",
+            "manifests/run_manifest.json",
+        } <= names
         assert {"renders/view_1.png", "renders/view_1.jpg", "base/view_1_cycles.png"} <= names
         report = zf.read("qa/qa_report.html").decode()
         assert "Mock models were used" in report and "Mock plan" in report
@@ -99,7 +116,11 @@ def test_rejected_gate_fails_run(svc: Services, project_id: str) -> None:
     svc.queue.resume(job_id)
     worker.run_until_idle()
     job = svc.queue.get(job_id)
-    assert job.status == JobStatus.FAILED and job.error is not None and job.error.code == "GATE_REJECTED"
+    assert (
+        job.status == JobStatus.FAILED
+        and job.error is not None
+        and job.error.code == "GATE_REJECTED"
+    )
 
 
 def store_ref(d: dict[str, object]):  # type: ignore[no-untyped-def]

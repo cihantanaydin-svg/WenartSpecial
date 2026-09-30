@@ -130,14 +130,24 @@ def load_model[M: Strict](ctx: StageContext, ref: CasRef, model: type[M]) -> M:
     return model.model_validate_json(ctx.store.read_bytes(ref))
 
 
-def materialize_package(ctx: StageContext, scene_json: CasRef, meshes: dict[str, CasRef], spec: SceneSpec | None, prefix: str) -> Path:
+def materialize_package(
+    ctx: StageContext,
+    scene_json: CasRef,
+    meshes: dict[str, CasRef],
+    spec: SceneSpec | None,
+    prefix: str,
+) -> Path:
     pkg = ctx.store.scratch_dir(prefix)
     (pkg / "meshes").mkdir()
     for rel, ref in meshes.items():
         dest = pkg / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ctx.store.path(ref), dest)
-    data = spec.model_dump_json(indent=1) if spec is not None else ctx.store.read_bytes(scene_json).decode()
+    data = (
+        spec.model_dump_json(indent=1)
+        if spec is not None
+        else ctx.store.read_bytes(scene_json).decode()
+    )
     (pkg / "scene.json").write_text(data, encoding="utf-8")
     return pkg
 
@@ -150,7 +160,9 @@ def build_stages(svc: Services) -> dict[str, StageDef[Any, Any]]:
         plan = mock_plan(ctx.project_id, inp.doc_shas)
         issues = validate_plan(plan)
         plan = plan.model_copy(update={"issues": issues})
-        ref = ctx.store.put_bytes(plan.model_dump_json(indent=1).encode(), "application/json", "plan.json")
+        ref = ctx.store.put_bytes(
+            plan.model_dump_json(indent=1).encode(), "application/json", "plan.json"
+        )
         return PlanOut(plan=plan, plan_json=ref, issues=issues)
 
     def s_brief(inp: BriefIn, ctx: StageContext) -> BriefOut:
@@ -161,11 +173,25 @@ def build_stages(svc: Services) -> dict[str, StageDef[Any, Any]]:
     def s_scene(inp: SceneIn, ctx: StageContext) -> SceneOut:
         plan = load_model(ctx, inp.plan_json, PlanGraph)
         reg = AssumptionRegister("S5")
-        scene_id = "scn_" + sha256_json({"plan": inp.plan_json.sha256, "section": inp.section, "brief": inp.brief})[:16]
-        compiled = SceneCompiler(svc.library).compile(plan, inp.section, inp.brief, inp.render, reg, scene_id=scene_id)
-        spec = compiled.spec.model_copy(update={"exports": compiled.spec.exports.model_copy(update={"blend": inp.blend})})
-        meshes = {p: ctx.store.put_bytes(b, "application/x-npz", p.rsplit("/", 1)[-1]) for p, b in compiled.mesh_blobs.items()}
-        scene_ref = ctx.store.put_bytes(spec.model_dump_json(indent=1).encode(), "application/json", "scene.json")
+        scene_id = (
+            "scn_"
+            + sha256_json(
+                {"plan": inp.plan_json.sha256, "section": inp.section, "brief": inp.brief}
+            )[:16]
+        )
+        compiled = SceneCompiler(svc.library).compile(
+            plan, inp.section, inp.brief, inp.render, reg, scene_id=scene_id
+        )
+        spec = compiled.spec.model_copy(
+            update={"exports": compiled.spec.exports.model_copy(update={"blend": inp.blend})}
+        )
+        meshes = {
+            p: ctx.store.put_bytes(b, "application/x-npz", p.rsplit("/", 1)[-1])
+            for p, b in compiled.mesh_blobs.items()
+        }
+        scene_ref = ctx.store.put_bytes(
+            spec.model_dump_json(indent=1).encode(), "application/json", "scene.json"
+        )
         pkg = materialize_package(ctx, scene_ref, meshes, None, "scene")
         out_dir = pkg / "out"
         try:
@@ -178,7 +204,14 @@ def build_stages(svc: Services) -> dict[str, StageDef[Any, Any]]:
             )
         finally:
             shutil.rmtree(pkg, ignore_errors=True)
-        return SceneOut(spec=spec, scene_json=scene_ref, meshes=meshes, glb=glb, blend_file=blend, assumptions=reg.items())
+        return SceneOut(
+            spec=spec,
+            scene_json=scene_ref,
+            meshes=meshes,
+            glb=glb,
+            blend_file=blend,
+            assumptions=reg.items(),
+        )
 
     def s_cameras(inp: CamerasIn, ctx: StageContext) -> CamerasOut:
         plan = load_model(ctx, inp.plan_json, PlanGraph)
@@ -197,20 +230,36 @@ def build_stages(svc: Services) -> dict[str, StageDef[Any, Any]]:
         pkg = materialize_package(ctx, inp.scene_json, inp.meshes, spec, f"render-{inp.camera.id}")
         out_dir = pkg / "out"
         try:
-            svc.blender.run(["render", str(pkg), str(out_dir), inp.camera.id], cwd=pkg, cancelled=ctx.cancelled)
+            svc.blender.run(
+                ["render", str(pkg), str(out_dir), inp.camera.id], cwd=pkg, cancelled=ctx.cancelled
+            )
             passes = read_passes(out_dir / "passes.exr")
             info = json.loads((out_dir / "render.json").read_text())
             lineart = line_art(passes, spec)
             ok, buf = cv2.imencode(".png", lineart)
             if not ok:
-                raise ArchRenderError(ErrorCode.INTERNAL, "Line-art encode failed.", "Retry the render.")
+                raise ArchRenderError(
+                    ErrorCode.INTERNAL, "Line-art encode failed.", "Retry the render."
+                )
             cam = camera_json(inp.camera, spec.render.width, spec.render.height)
             return RenderOut(
-                beauty_png=ctx.store.put_file(out_dir / "beauty.png", "image/png", f"{inp.camera.id}_cycles.png"),
-                passes_exr=ctx.store.put_file(out_dir / "passes.exr", "image/x-exr", f"{inp.camera.id}_passes.exr"),
-                passes_npz=ctx.store.put_bytes(passes.to_npz(), "application/x-npz", f"{inp.camera.id}_passes.npz"),
-                lineart_png=ctx.store.put_bytes(bytes(buf), "image/png", f"{inp.camera.id}_lineart.png"),
-                camera_json=ctx.store.put_bytes(json.dumps(cam, indent=1).encode(), "application/json", f"{inp.camera.id}_camera.json"),
+                beauty_png=ctx.store.put_file(
+                    out_dir / "beauty.png", "image/png", f"{inp.camera.id}_cycles.png"
+                ),
+                passes_exr=ctx.store.put_file(
+                    out_dir / "passes.exr", "image/x-exr", f"{inp.camera.id}_passes.exr"
+                ),
+                passes_npz=ctx.store.put_bytes(
+                    passes.to_npz(), "application/x-npz", f"{inp.camera.id}_passes.npz"
+                ),
+                lineart_png=ctx.store.put_bytes(
+                    bytes(buf), "image/png", f"{inp.camera.id}_lineart.png"
+                ),
+                camera_json=ctx.store.put_bytes(
+                    json.dumps(cam, indent=1).encode(),
+                    "application/json",
+                    f"{inp.camera.id}_camera.json",
+                ),
                 info=info,
             )
         finally:
@@ -255,7 +304,13 @@ def build_stages(svc: Services) -> dict[str, StageDef[Any, Any]]:
         else:
             delivered_png = next(r for r in stored if r.sha256 == result.outcome.delivered_sha256)
         jpg = ctx.store.put_bytes(encode_jpeg(result.delivered), "image/jpeg", f"{inp.view_id}.jpg")
-        return RefineQAOut(outcome=result.outcome, delivered_png=delivered_png, delivered_jpg=jpg, candidates=stored, log=result.log)
+        return RefineQAOut(
+            outcome=result.outcome,
+            delivered_png=delivered_png,
+            delivered_jpg=jpg,
+            candidates=stored,
+            log=result.log,
+        )
 
     def models_refine() -> list[Any]:
         return [svc.models.ref(r) for r in ("refiner", "depth", "segmenter")]
@@ -264,15 +319,31 @@ def build_stages(svc: Services) -> dict[str, StageDef[Any, Any]]:
         "plan": StageDef("S2_plan", "1", PlanOut, s_plan),
         "brief": StageDef("S4_brief", "1", BriefOut, s_brief),
         "scene": StageDef(
-            "S5_scene", "1", SceneOut, s_scene,
-            config=lambda: {"materials": sha256_json([svc.library.get(i).model_dump() for i in svc.library.ids()]),
-                            "blender": BLENDER_VERSION},
+            "S5_scene",
+            "1",
+            SceneOut,
+            s_scene,
+            config=lambda: {
+                "materials": sha256_json(
+                    [svc.library.get(i).model_dump() for i in svc.library.ids()]
+                ),
+                "blender": BLENDER_VERSION,
+            },
         ),
         "cameras": StageDef("S6_cameras", "1", CamerasOut, s_cameras),
-        "render": StageDef("S7_render", "1", RenderOut, s_render, config=lambda: {"blender": BLENDER_VERSION}),
+        "render": StageDef(
+            "S7_render", "1", RenderOut, s_render, config=lambda: {"blender": BLENDER_VERSION}
+        ),
         "refine_qa": StageDef(
-            "S8S9_refine_qa", "1", RefineQAOut, s_refine_qa,
-            config=lambda: {"refine": prof.refine.model_dump(), "qa": svc.qa_config.model_dump(), "qa_width": prof.qa_width},
+            "S8S9_refine_qa",
+            "1",
+            RefineQAOut,
+            s_refine_qa,
+            config=lambda: {
+                "refine": prof.refine.model_dump(),
+                "qa": svc.qa_config.model_dump(),
+                "qa_width": prof.qa_width,
+            },
             models=models_refine,
         ),
     }

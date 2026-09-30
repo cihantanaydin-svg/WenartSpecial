@@ -41,11 +41,15 @@ def _cosine_window(h: int, w: int, overlap: int) -> NDArray[np.float32]:
     return np.outer(ramp(h), ramp(w)).astype(np.float32)
 
 
+def _resize(img: Img, w: int, h: int) -> Img:
+    return np.asarray(cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA), dtype=np.float32)
+
+
 def tile_grid(size: int, tile: int, overlap: int) -> list[int]:
     if size <= tile:
         return [0]
     step = tile - overlap
-    starts = list(range(0, size - tile, step)) + [size - tile]
+    starts = [*list(range(0, size - tile, step)), size - tile]
     return sorted(set(starts))
 
 
@@ -64,14 +68,14 @@ def refine_image(
 ) -> Img:
     h, w = base.shape[:2]
     gw, gh = working_size(w, h, profile.global_megapixels)
-    small = cv2.resize(base, (gw, gh), interpolation=cv2.INTER_AREA) if (gw, gh) != (w, h) else base
+    small = _resize(base, gw, gh) if (gw, gh) != (w, h) else base
     req = RefineRequest(
         base=small,
         strength_map=resize_map(strength, (gh, gw)),
         prompt=prompt,
         seed=seed,
-        depth_vis=None if depth_vis is None else cv2.resize(depth_vis, (gw, gh)),
-        edges_vis=None if edges_vis is None else cv2.resize(edges_vis, (gw, gh)),
+        depth_vis=None if depth_vis is None else _resize(depth_vis, gw, gh),
+        edges_vis=None if edges_vis is None else _resize(edges_vis, gw, gh),
         references=list(references or []),
     )
     global_out = refiner.refine(req)

@@ -38,9 +38,15 @@ def test_permissive_allowed() -> None:
     ("kw", "reason"),
     [
         ({"commercial_ok": False}, "not commercially usable"),
-        ({"license": LicenseInfo.model_validate({"id": "cc-by-nc-4.0", "class": "blocked"})}, "blocked list"),
+        (
+            {"license": LicenseInfo.model_validate({"id": "cc-by-nc-4.0", "class": "blocked"})},
+            "blocked list",
+        ),
         ({"caps": {"mau": "100000000"}}, "caps"),
-        ({"license": LicenseInfo.model_validate({"id": "weird-1.0", "class": "permissive"})}, "not in the allowlist"),
+        (
+            {"license": LicenseInfo.model_validate({"id": "weird-1.0", "class": "permissive"})},
+            "not in the allowlist",
+        ),
     ],
 )
 def test_blocked_reasons(kw: dict[str, object], reason: str) -> None:
@@ -56,7 +62,9 @@ def test_territorial_exclusion_uses_jurisdictions() -> None:
 
 
 def test_conditional_requires_acceptance() -> None:
-    lic = LicenseInfo.model_validate({"id": "sam-license", "class": "conditional", "terms_id": "sam-license-2025-11-19"})
+    lic = LicenseInfo.model_validate(
+        {"id": "sam-license", "class": "conditional", "terms_id": "sam-license-2025-11-19"}
+    )
     e = _entry(license=lic)
     assert not _gate().allowed(e)
     assert _gate(accepted_license_terms=["sam-license-2025-11-19"]).allowed(e)
@@ -85,7 +93,12 @@ def test_repo_registry_profiles_are_all_allowed_and_blocked_entries_blocked() ->
 
 
 def test_depth_registry_only_apache_da3_ids() -> None:
-    allowed = {"depth-anything/DA3-SMALL", "depth-anything/DA3-BASE", "depth-anything/DA3MONO-LARGE", "depth-anything/DA3METRIC-LARGE"}
+    allowed = {
+        "depth-anything/DA3-SMALL",
+        "depth-anything/DA3-BASE",
+        "depth-anything/DA3MONO-LARGE",
+        "depth-anything/DA3METRIC-LARGE",
+    }
     for e in Registry.load(CFG).entries():
         if e.repo and e.repo.startswith("depth-anything/"):
             assert e.repo in allowed, e.repo

@@ -24,7 +24,11 @@ def main() -> int:
         if not base.exists():
             continue
         for path in base.rglob("*"):
-            if path.suffix not in SUFFIXES or not path.is_file() or path.name == Path(__file__).name:
+            if (
+                path.suffix not in SUFFIXES
+                or not path.is_file()
+                or path.name == Path(__file__).name
+            ):
                 continue
             for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
                 if PATTERN.search(line):

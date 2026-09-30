@@ -47,10 +47,12 @@ def seam_score(img: Img, tile: int, overlap: int) -> float:
     """Mean gradient on tile borders divided by mean gradient elsewhere (1.0 ≈ seamless)."""
     lum = luminance(img)
     gx = np.abs(np.diff(lum, axis=1))
-    h, w = lum.shape
+    _h, w = lum.shape
     step = tile - overlap
     if step <= 0 or w <= tile:
         return 1.0
-    cols = [x for x in range(step, w - 1, step)]
-    border = np.concatenate([gx[:, c - 1 : c + 1].ravel() for c in cols]) if cols else np.array([0.0])
+    cols = list(range(step, w - 1, step))
+    border = (
+        np.concatenate([gx[:, c - 1 : c + 1].ravel() for c in cols]) if cols else np.array([0.0])
+    )
     return float((border.mean() + 1e-6) / (gx.mean() + 1e-6))

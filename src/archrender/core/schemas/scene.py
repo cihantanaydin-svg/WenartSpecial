@@ -32,7 +32,17 @@ ObjectCategory = Literal[
 
 # Categories whose geometry must never be altered by generative refinement.
 STRUCTURAL_CATEGORIES: frozenset[str] = frozenset(
-    {"wall", "floor", "ceiling", "skirting", "opening_frame", "glass", "door_leaf", "builtin", "cut_cap"}
+    {
+        "wall",
+        "floor",
+        "ceiling",
+        "skirting",
+        "opening_frame",
+        "glass",
+        "door_leaf",
+        "builtin",
+        "cut_cap",
+    }
 )
 
 # Stable object pass indices per category (used for masks; 0 = background/sky).
@@ -117,10 +127,14 @@ class CameraSpec(Strict):
     ortho_scale: float | None = None
 
 
+def _default_backends() -> list[Literal["OPTIX", "CUDA"]]:
+    return ["OPTIX", "CUDA"]
+
+
 class RenderSettings(Strict):
     engine: Literal["CYCLES"] = "CYCLES"
     device: Literal["AUTO", "CPU", "GPU"] = "AUTO"
-    gpu_backends: list[Literal["OPTIX", "CUDA"]] = Field(default_factory=lambda: ["OPTIX", "CUDA"])
+    gpu_backends: list[Literal["OPTIX", "CUDA"]] = Field(default_factory=_default_backends)
     width: int = Field(ge=16, le=8192)
     height: int = Field(ge=16, le=8192)
     samples: int = Field(default=512, ge=1, le=8192)
@@ -147,7 +161,7 @@ class AssetLicense(Strict):
 
 
 class SceneSpec(Strict):
-    schema_version: Literal[1] = SCENE_SCHEMA_VERSION
+    schema_version: Literal[1] = 1  # == SCENE_SCHEMA_VERSION
     scene_id: str
     north_angle_deg: float = 0.0
     objects: list[SceneObject] = Field(min_length=1)
