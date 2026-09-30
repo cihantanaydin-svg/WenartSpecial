@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archrender.local/schemas/Classification.schema.json",
+  "additionalProperties": false,
+  "properties": {
+    "page_id": {
+      "title": "Page Id",
+      "type": "string"
+    },
+    "label": {
+      "enum": [
+        "floor_plan",
+        "ceiling_plan",
+        "section",
+        "elevation",
+        "detail",
+        "site_plan",
+        "schedule",
+        "text_document",
+        "photo",
+        "moodboard",
+        "other"
+      ],
+      "title": "Label",
+      "type": "string"
+    },
+    "confidence": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "probabilities": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "title": "Probabilities",
+      "type": "object"
+    },
+    "sources": {
+      "additionalProperties": true,
+      "title": "Sources",
+      "type": "object"
+    },
+    "needs_review": {
+      "default": false,
+      "title": "Needs Review",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "page_id",
+    "label",
+    "confidence",
+    "probabilities"
+  ],
+  "title": "Classification",
+  "type": "object"
+}

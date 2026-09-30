@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archrender.local/schemas/Schedule.schema.json",
+  "$defs": {
+    "ScheduleRow": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "tag": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tag"
+        },
+        "fields": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Fields",
+          "type": "object"
+        },
+        "source_page": {
+          "title": "Source Page",
+          "type": "string"
+        },
+        "row_index": {
+          "title": "Row Index",
+          "type": "integer"
+        },
+        "links": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Links",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "fields",
+        "source_page",
+        "row_index"
+      ],
+      "title": "ScheduleRow",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "door_window",
+        "finish",
+        "unknown"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "source_page": {
+      "title": "Source Page",
+      "type": "string"
+    },
+    "header": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Header",
+      "type": "array"
+    },
+    "columns": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Columns",
+      "type": "object"
+    },
+    "rows": {
+      "items": {
+        "$ref": "#/$defs/ScheduleRow"
+      },
+      "title": "Rows",
+      "type": "array"
+    }
+  },
+  "required": [
+    "id",
+    "kind",
+    "source_page",
+    "header",
+    "columns",
+    "rows"
+  ],
+  "title": "Schedule",
+  "type": "object"
+}

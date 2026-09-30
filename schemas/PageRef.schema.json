@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archrender.local/schemas/PageRef.schema.json",
+  "$defs": {
+    "CasRef": {
+      "description": "Reference to an immutable blob in a project's CAS.",
+      "properties": {
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size": {
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        },
+        "media_type": {
+          "default": "application/octet-stream",
+          "title": "Media Type",
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        }
+      },
+      "required": [
+        "sha256",
+        "size"
+      ],
+      "title": "CasRef",
+      "type": "object"
+    },
+    "Tile": {
+      "additionalProperties": false,
+      "description": "Full-resolution raster tile (pixels of the page raster) for OCR and VLM reading.",
+      "properties": {
+        "x": {
+          "minimum": 0,
+          "title": "X",
+          "type": "integer"
+        },
+        "y": {
+          "minimum": 0,
+          "title": "Y",
+          "type": "integer"
+        },
+        "w": {
+          "exclusiveMinimum": 0,
+          "title": "W",
+          "type": "integer"
+        },
+        "h": {
+          "exclusiveMinimum": 0,
+          "title": "H",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
+      "title": "Tile",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "document_id": {
+      "title": "Document Id",
+      "type": "string"
+    },
+    "index": {
+      "minimum": 0,
+      "title": "Index",
+      "type": "integer"
+    },
+    "kind": {
+      "enum": [
+        "pdf_page",
+        "image",
+        "dxf",
+        "ifc",
+        "svg",
+        "model_3dm",
+        "docx",
+        "sheet",
+        "slide",
+        "text"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "width_px": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Width Px"
+    },
+    "height_px": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Height Px"
+    },
+    "dpi": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Dpi"
+    },
+    "width_mm": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Width Mm"
+    },
+    "height_mm": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Height Mm"
+    },
+    "raster": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CasRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "words": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CasRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "content": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CasRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "tiles": {
+      "items": {
+        "$ref": "#/$defs/Tile"
+      },
+      "title": "Tiles",
+      "type": "array"
+    },
+    "meta": {
+      "additionalProperties": true,
+      "title": "Meta",
+      "type": "object"
+    }
+  },
+  "required": [
+    "id",
+    "document_id",
+    "index",
+    "kind"
+  ],
+  "title": "PageRef",
+  "type": "object"
+}

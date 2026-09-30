@@ -24,6 +24,7 @@ from archrender.pipeline.gates import GateWait
 from archrender.pipeline.queue import LeaseLost
 from archrender.pipeline.run import RunOrchestrator
 from archrender.pipeline.services import Services
+from archrender.understand.stage import run_understanding
 
 log = get_logger(__name__)
 
@@ -144,7 +145,24 @@ class Worker:
             self.svc.queue.progress(job.id, fraction, message.split(" ", 1)[0], message)
 
         if job.kind == JobKind.INTAKE:
-            return run_intake(self.svc, str(job.payload["upload_id"]))
+            result = run_intake(self.svc, str(job.payload["upload_id"]))
+            # S1 for the project's pages (unchanged pages are cache hits); one pending job suffices
+            if not self.svc.db.one(
+                "SELECT 1 FROM jobs WHERE project_id = ? AND kind = 'understand' AND status = 'queued'",
+                (job.project_id,),
+            ):
+                self.svc.queue.enqueue(
+                    job.project_id, JobKind.UNDERSTAND, "gpu", {}, created_by=job.created_by
+                )
+            return result
+        if job.kind == JobKind.UNDERSTAND:
+            ctx = StageContext(
+                project_id=job.project_id,
+                store=self.svc.store(job.project_id),
+                progress=progress,
+                cancelled=cancelled,
+            )
+            return run_understanding(self.svc, ctx)
         if job.kind == JobKind.RUN:
             ctx = StageContext(
                 project_id=job.project_id,

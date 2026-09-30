@@ -20,6 +20,10 @@
         "INGEST_INCOMPLETE_UPLOAD",
         "INGEST_PARSER_FAILED",
         "INGEST_DWG_CONVERSION_FAILED",
+        "INGEST_CORRUPT",
+        "INGEST_ENCRYPTED",
+        "INGEST_LIMIT_EXCEEDED",
+        "INGEST_TOOL_MISSING",
         "PLAN_NO_PLAN_FOUND",
         "PLAN_SCALE_CONFLICT",
         "PLAN_INVALID",
@@ -92,6 +96,7 @@
     "JobKind": {
       "enum": [
         "intake",
+        "understand",
         "run",
         "bundle"
       ],

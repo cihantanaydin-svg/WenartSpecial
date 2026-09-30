@@ -11,6 +11,7 @@ import pytest
 from PIL import Image
 
 from archrender.core.config import REPO_ROOT
+from archrender.core.errors import ArchRenderError, ErrorCode
 from archrender.core.schemas.document import Tile, Word
 from archrender.ingest.intake import tiles
 from archrender.ingest.tasks import _page_to_px, _pdf_words
@@ -22,7 +23,15 @@ from archrender.synth.sheets import GT_DPI, floor_plan_page, schedule_page, site
 from archrender.understand.north import measure_north
 from archrender.understand.ocr import ocr_tiles
 from archrender.understand.schedules import link_rows, rows_from_words, schedule_from_rows
-from archrender.understand.tags import read_bubble_tags, tags_from_words
+from archrender.understand.tags import (
+    _vote,
+    bubble_reading_to_tag,
+    bubble_text,
+    find_bubbles,
+    ink_mask,
+    read_bubble_tags,
+    tags_from_words,
+)
 from archrender.understand.titleblock import extract_title_block
 from tests.conftest import require_tool
 
@@ -86,6 +95,56 @@ def test_tiling_reads_each_word_once_and_drops_words_cut_by_inner_edges() -> Non
     assert (salon.x0, salon.x1) == (950, 1150) and salon.source == "ocr:test"
 
 
+class _FailingOnSecondTile(_BlobReader):
+    def read(self, img: np.ndarray, langs: list[str]) -> list[OcrWord]:
+        if img.shape[1] == 999:
+            raise ArchRenderError(ErrorCode.STAGE_FAILED, "Tesseract did not finish.", "")
+        return super().read(img, langs)
+
+
+def test_an_unreadable_tile_is_reported_and_the_rest_is_still_read() -> None:
+    page = np.full((800, 1600, 3), 255, np.uint8)
+    page[100:140, 100:300] = 10
+    ts = [Tile(x=0, y=0, w=1000, h=800), Tile(x=601, y=0, w=999, h=800)]
+    engine = _FailingOnSecondTile({10: "DUVAR"})
+    with pytest.raises(ArchRenderError):  # without a failure list the page fails loudly
+        ocr_tiles(page, ts, engine, langs=["tr"], source="ocr:test", rotations=(0,))
+    failures: list[str] = []
+    got = ocr_tiles(
+        page, ts, engine, langs=["tr"], source="ocr:test", rotations=(0,), failures=failures
+    )
+    assert [w.text for w in got] == ["DUVAR"]
+    assert failures == ["tile x=601 y=0 999×800 px, 0°: Tesseract did not finish."]
+
+
+def test_only_noisy_scans_are_despeckled_before_ocr() -> None:
+    from archrender.models.impls.tesseract import DESPECKLE_SIGMA, noise_sigma
+
+    page = floor_plan_page(np.random.default_rng(23))
+    for quality, noisy in (("clean", False), ("noisy", True)):
+        data, _, _ = scan(page.pdf, page.gt, np.random.default_rng(3), dpi=200, quality=quality)
+        gray = np.asarray(Image.open(io.BytesIO(data)).convert("L"))[:1536, :1536]
+        assert (noise_sigma(np.ascontiguousarray(gray)) > DESPECKLE_SIGMA) is noisy, quality
+
+
+def test_tesseract_timeout_is_an_actionable_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    from archrender.models.impls.tesseract import TesseractOcr
+
+    eng = TesseractOcr(Registry.load(REPO_ROOT / "configs").get("tesseract-5"))
+    eng.binary = "/usr/bin/tesseract"
+
+    def hang(cmd: list[str], data: bytes) -> None:
+        raise subprocess.TimeoutExpired(cmd, 120)
+
+    monkeypatch.setattr(TesseractOcr, "_run", staticmethod(hang))
+    with pytest.raises(ArchRenderError) as e:
+        eng.read(np.full((64, 64, 3), 255, np.uint8), ["tr"])
+    assert "did not finish" in e.value.message and not e.value.retryable
+    assert eng.read_line(np.full((64, 64, 3), 255, np.uint8), "K0123") == ""
+
+
 # ---------------------------------------------------------------------------------------------
 # real OCR on synthetic scans
 # ---------------------------------------------------------------------------------------------
@@ -127,17 +186,59 @@ def test_tesseract_reads_dimensions_and_title_block_on_a_clean_scan(tesseract) -
     assert recall("title:") >= 0.95
 
 
-def test_bubble_tags_read_without_false_positives(tesseract) -> None:  # type: ignore[no-untyped-def]
-    page = floor_plan_page(np.random.default_rng(21))
-    data, _, gt = scan(
-        page.pdf, page.gt, np.random.default_rng(2), dpi=300, skew_deg=0.0, quality="clean"
-    )
-    gray = np.asarray(Image.open(io.BytesIO(data)).convert("L"))
-    hits = read_bubble_tags(gray, 300, tesseract)
-    truth = {t["tag"] for t in gt["tags"]}
-    got = {h.tag for h in hits}
-    assert not got - truth  # nothing invented
-    assert len(got & truth) / len(truth) >= 0.6  # measured baseline for bubbles on clean scans
+@pytest.mark.parametrize("quality", ["clean", "noisy"])
+def test_bubble_tags_read_without_false_positives(tesseract, quality: str) -> None:  # type: ignore[no-untyped-def]
+    found = total = 0
+    for seed in (21, 22):
+        page = floor_plan_page(np.random.default_rng(seed))
+        data, _, gt = scan(
+            page.pdf, page.gt, np.random.default_rng(2), dpi=300, skew_deg=0.0, quality=quality
+        )
+        gray = np.asarray(Image.open(io.BytesIO(data)).convert("L"))
+        truth = {t["tag"] for t in gt["tags"]}
+        got = {h.tag for h in read_bubble_tags(gray, 300, tesseract)}
+        assert not got - truth  # nothing invented
+        found += len(got & truth)
+        total += len(truth)
+    # measured baseline at 300 DPI (Phase 2: 95–97 % on 6 plans per quality; swings crossing
+    # the lettering are the misses)
+    assert found / total >= 0.9
+
+
+def test_bubbles_touching_a_door_swing_are_found_and_read_apart_from_it() -> None:
+    import cv2
+
+    gray = np.full((300, 300), 240, np.uint8)
+    cv2.circle(gray, (150, 150), 38, 30, 2)  # 6.4 mm bubble at 300 DPI
+    cv2.putText(gray, "K7", (122, 165), cv2.FONT_HERSHEY_DUPLEX, 1.2, 20, 4)
+    cv2.ellipse(gray, (60, 60), (150, 150), 0, 0, 90, 30, 2)  # swing arc across the bubble
+    bubbles = find_bubbles(gray, 300)
+    # the outer boundary merged with the arc; the larger piece of the split hole is kept
+    assert len(bubbles) == 1
+    cx, cy, ew, eh, _ = bubbles[0]
+    assert abs(cx - 150) < 8 and abs(cy - 150) < 8 and 50 < min(ew, eh) <= max(ew, eh) < 80
+    crop = bubble_text(gray, ink_mask(gray), bubbles[0], 300, 4)
+    assert crop is not None
+    ink = crop < 128
+    # the lettering survives, the arc does not: no ink reaches the crop's border rows/columns
+    assert ink.sum() > 300
+    assert not (ink[0].any() or ink[-1].any() or ink[:, 0].any() or ink[:, -1].any())
+
+
+def test_bubble_readings_repair_digit_look_alikes_only_after_a_tag_prefix() -> None:
+    assert bubble_reading_to_tag("PS") == "P5"
+    assert bubble_reading_to_tag("KIO") == "K10"
+    assert bubble_reading_to_tag("K-07") == "K7"  # plain tags parse as before
+    assert bubble_reading_to_tag("SO") is None  # no door/window prefix
+    assert bubble_reading_to_tag("PX") is None  # X is no digit look-alike
+    assert bubble_reading_to_tag("") is None
+
+
+def test_bubble_vote_needs_two_agreeing_readings_and_no_conflict() -> None:
+    assert _vote(["K7", "K7", None]) == "K7"
+    assert _vote(["K7", None, None]) is None
+    assert _vote(["K7", "K7", "K1"]) is None
+    assert _vote([None, None, None]) is None
 
 
 # ---------------------------------------------------------------------------------------------

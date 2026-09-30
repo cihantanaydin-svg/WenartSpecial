@@ -6,7 +6,7 @@ BLENDER_VENV := .venv-blender
 BLENDER_VERSION := 5.2.2
 
 .PHONY: help setup setup-blender ui lint typecheck test test-fast e2e eval schemas license-audit \
-        dev-server dev-worker docker-build docker-build-local docker-smoke deploy-dry-run clean
+        train-classifier dev-server dev-worker docker-build docker-build-local docker-smoke deploy-dry-run clean
 
 help:
 	@echo "setup           install app + dev deps (uv), Playwright uses /opt/pw-browsers"
@@ -50,6 +50,9 @@ e2e: ui
 
 eval:
 	$(UV) run python scripts/eval.py
+
+train-classifier:
+	$(UV) run python -m archrender.understand.train --cache var/classifier-features
 
 schemas:
 	$(UV) run python scripts/export_schemas.py

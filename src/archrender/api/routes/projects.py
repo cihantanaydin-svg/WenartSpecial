@@ -138,6 +138,8 @@ def purge_project(
             "upload_chunks",
             "uploads",
             "review_items",
+            "schedules",
+            "page_analysis",
             "pages",
             "documents",
             "project_members",

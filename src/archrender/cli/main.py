@@ -178,6 +178,61 @@ def cmd_download(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_pages(args: argparse.Namespace) -> int:
+    c = _client(args)
+    if args.set:
+        page_id, label = args.set
+        _print(c.set_page_class(args.project, page_id, label, args.note), args.json)
+        return 0
+    pages = c.pages(args.project)
+    if args.json:
+        _print(pages, True)
+        return 0
+    for p in pages:
+        conf = f"{p['confidence']:.2f}" if p["confidence"] is not None else "  - "
+        flag = " REVIEW" if p["needs_review"] else (" (corrected)" if p["overridden"] else "")
+        scale = f" 1:{p['scale']:g}" if p.get("scale") else ""
+        print(
+            f"{p['page_id']}  {p['label'] or '-':<14} {conf}{flag}{scale}  {p['filename']}"
+            f" p{p['index'] + 1}"
+        )
+    return 0
+
+
+def cmd_schedules(args: argparse.Namespace) -> int:
+    schedules = _client(args).schedules(args.project)
+    if args.json:
+        _print(schedules, True)
+        return 0
+    for s in schedules:
+        rows = s["rows"]
+        linked = sum(1 for r in rows if r.get("links"))
+        print(f"{s['id']}  {s['kind']:<11} {len(rows)} rows, {linked} linked to plan tags")
+        for r in rows:
+            if r.get("tag") and not r.get("links"):
+                print(f"    {r['tag']}: not found on any plan")
+    return 0
+
+
+def cmd_review(args: argparse.Namespace) -> int:
+    c = _client(args)
+    if args.resolve or args.dismiss:
+        item = args.resolve or args.dismiss
+        action = "resolve" if args.resolve else "dismiss"
+        _print(c.decide_review(args.project, item, action, args.note), args.json)
+        return 0
+    items = c.review_items(args.project, args.status)
+    if args.json:
+        _print(items, True)
+        return 0
+    for i in items:
+        print(
+            f"{i['id']}  {i['kind']:<14} {i['subject_id']}  "
+            f"{json.dumps(i['payload'], ensure_ascii=False)[:120]}"
+        )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="archrender", description="ArchRender CLI")
     p.add_argument("--url", default=os.environ.get("ARCHRENDER_URL"))
@@ -251,6 +306,29 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("gate", choices=["A_plan", "B_brief", "C_cameras", "D_final"])
     g.add_argument("--notes")
     g.set_defaults(fn=cmd_gate)
+
+    pg = sub.add_parser(
+        "pages", parents=[common], help="list a project's pages with their class (S1)"
+    )
+    pg.add_argument("project")
+    pg.add_argument("--set", nargs=2, metavar=("PAGE_ID", "CLASS"), help="correct a page's class")
+    pg.add_argument("--note")
+    pg.set_defaults(fn=cmd_pages)
+
+    sc = sub.add_parser(
+        "schedules", parents=[common], help="list schedules and their links to plan tags"
+    )
+    sc.add_argument("project")
+    sc.set_defaults(fn=cmd_schedules)
+
+    rv = sub.add_parser("review", parents=[common], help="list or decide review-queue items")
+    rv.add_argument("project")
+    rv.add_argument("--status", default="open", choices=["open", "resolved", "dismissed", "all"])
+    act = rv.add_mutually_exclusive_group()
+    act.add_argument("--resolve", metavar="ITEM_ID")
+    act.add_argument("--dismiss", metavar="ITEM_ID")
+    rv.add_argument("--note")
+    rv.set_defaults(fn=cmd_review)
 
     d = sub.add_parser("download", parents=[common], help="download a run's bundle (resumable)")
     d.add_argument("run")

@@ -64,6 +64,9 @@ class ArchRenderClient:
     def _post(self, url: str, **kw: Any) -> Any:
         return self._check(self._retry(lambda: self.http.post(url, **kw)))
 
+    def _put(self, url: str, **kw: Any) -> Any:
+        return self._check(self._retry(lambda: self.http.put(url, **kw)))
+
     def _unreachable(self, e: httpx.TransportError) -> ArchRenderClientError:
         return ArchRenderClientError(
             0,
@@ -110,6 +113,41 @@ class ArchRenderClient:
 
     def documents(self, project_id: str) -> list[dict[str, Any]]:
         return list(self._get(f"/api/v1/projects/{project_id}/documents"))
+
+    # ---- understanding (S1) -------------------------------------------------------------------
+    def pages(self, project_id: str) -> list[dict[str, Any]]:
+        return list(self._get(f"/api/v1/projects/{project_id}/pages"))
+
+    def set_page_class(
+        self, project_id: str, page_id: str, label: str, note: str | None = None
+    ) -> dict[str, Any]:
+        return dict(
+            self._put(
+                f"/api/v1/projects/{project_id}/pages/{page_id}/class",
+                json={"label": label, "note": note},
+            )
+        )
+
+    def understanding_status(self, project_id: str) -> dict[str, Any] | None:
+        """The project's latest S1 (page analysis) job, or None before the first upload."""
+        job = self._get(f"/api/v1/projects/{project_id}/understand")
+        return dict(job) if job else None
+
+    def schedules(self, project_id: str) -> list[dict[str, Any]]:
+        return list(self._get(f"/api/v1/projects/{project_id}/schedules"))
+
+    def review_items(self, project_id: str, status: str = "open") -> list[dict[str, Any]]:
+        return list(self._get(f"/api/v1/projects/{project_id}/review", params={"status": status}))
+
+    def decide_review(
+        self, project_id: str, item_id: str, action: str, note: str | None = None
+    ) -> dict[str, Any]:
+        return dict(
+            self._post(
+                f"/api/v1/projects/{project_id}/review/{item_id}",
+                json={"action": action, "note": note},
+            )
+        )
 
     # ---- uploads ------------------------------------------------------------------------------
     def upload(

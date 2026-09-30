@@ -68,3 +68,14 @@ export interface Run {
   bundle: null | { id: string; sha256: string; size: number; status: string };
 }
 export interface Job { id: string; status: string; progress: number; stage: string | null; error: ApiError | null }
+export interface PageInfo {
+  page_id: string; document_id: string; filename: string; index: number; kind: string;
+  preview: CasRef | null; label: string | null; model_label: string | null; confidence: number | null;
+  needs_review: boolean; overridden: boolean; scale: number | null; north_deg: number | null;
+  title: Record<string, string>; tags: number; analysed: boolean;
+}
+export interface ReviewItem { id: string; kind: string; subject_id: string; status: string; payload: Record<string, unknown> }
+export const PAGE_CLASSES = [
+  "floor_plan", "ceiling_plan", "section", "elevation", "detail", "site_plan",
+  "schedule", "text_document", "photo", "moodboard", "other",
+] as const;

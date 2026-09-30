@@ -399,12 +399,15 @@ def draw_room_labels(
     lang: str,
     *,
     ceiling: bool = False,
+    room_numbers: bool = False,
 ) -> None:
     rooms = []
     area_style = rng.choice(["comma", "dot"]) if lang == "en" else "comma"
-    for r in layout.rooms:
+    for i, r in enumerate(layout.rooms):
         x, y = fr.p(*r.center)
         name = r.name.upper() if rng.random() < 0.4 else r.name
+        if room_numbers:  # matches the finish schedule's "MAHAL NO" (Z01, Z02, …)
+            sh.text(x, y + 13, room_number(i), 7.5, anchor="center", role=f"tag:{room_number(i)}")
         sh.text(x, y + 2, name, 8.5, font="bold", anchor="center", role="room_name")
         if ceiling:
             height = 2.8 if r.name not in ("Banyo", "WC", "Bathroom") else 2.4
@@ -422,6 +425,10 @@ def draw_room_labels(
             )
         rooms.append({"id": r.id, "name": r.name, "area_m2": round(r.area, 2)})
     sh.gt["rooms"] = rooms
+
+
+def room_number(i: int) -> str:
+    return f"Z{i + 1:02d}"
 
 
 def _dim_line(
@@ -559,6 +566,7 @@ def floor_plan_page(
     *,
     lang: str = "tr",
     ceiling: bool = False,
+    room_numbers: bool = False,
 ) -> Page:
     layout = layout or random_layout(rng, english=lang == "en")
     extent = (layout.width + 6.0, layout.depth + 6.0)
@@ -582,7 +590,7 @@ def floor_plan_page(
     else:
         draw_walls(sh, fr, layout, str(rng.choice(["solid", "solid", "grey", "outline"])))
         draw_openings(sh, fr, layout, swings=True)
-        draw_room_labels(sh, fr, layout, rng, lang)
+        draw_room_labels(sh, fr, layout, rng, lang, room_numbers=room_numbers)
         draw_tags(sh, fr, layout, rng)
         draw_dimensions(sh, fr, layout, "comma" if lang == "tr" else str(rng.choice(["dot", "cm"])))
         title = "ZEMİN KAT PLANI" if lang == "tr" else "GROUND FLOOR PLAN"
@@ -956,7 +964,7 @@ def schedule_rows(
     for i, r in enumerate(layout.rooms):
         rows.append(
             [
-                f"Z{i + 1:02d}",
+                room_number(i),
                 r.name,
                 str(rng.choice(floors)),
                 str(rng.choice(walls)),

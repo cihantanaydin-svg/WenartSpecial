@@ -29,6 +29,7 @@ class JobStatus(StrEnum):
 
 class JobKind(StrEnum):
     INTAKE = "intake"
+    UNDERSTAND = "understand"
     RUN = "run"
     BUNDLE = "bundle"
 

@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archrender.local/schemas/IntakeResult.schema.json",
+  "$defs": {
+    "SkippedEntry": {
+      "additionalProperties": false,
+      "description": "An archive entry or embedded object that was not ingested, and why.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "fix_hint": {
+          "default": "",
+          "title": "Fix Hint",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "code",
+        "message"
+      ],
+      "title": "SkippedEntry",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "document_id": {
+      "title": "Document Id",
+      "type": "string"
+    },
+    "kind": {
+      "title": "Kind",
+      "type": "string"
+    },
+    "sha256": {
+      "title": "Sha256",
+      "type": "string"
+    },
+    "deduplicated": {
+      "title": "Deduplicated",
+      "type": "boolean"
+    },
+    "pages": {
+      "title": "Pages",
+      "type": "integer"
+    },
+    "children": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Children",
+      "type": "array"
+    },
+    "skipped": {
+      "items": {
+        "$ref": "#/$defs/SkippedEntry"
+      },
+      "title": "Skipped",
+      "type": "array"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "document_id",
+    "kind",
+    "sha256",
+    "deduplicated",
+    "pages"
+  ],
+  "title": "IntakeResult",
+  "type": "object"
+}

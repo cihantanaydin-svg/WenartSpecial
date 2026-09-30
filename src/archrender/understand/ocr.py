@@ -4,6 +4,9 @@ Each tile is read at 0° and, for vertical dimension strings, rotated by 90°. W
 to page pixels. A word touching an inner tile edge is dropped (the overlapping tile contains it
 whole), and duplicates from overlaps and rotations are merged by IoU and equal text, keeping the
 more confident reading. The VLM is never asked to read small text from a downscaled sheet.
+
+A tile the engine cannot read (e.g. a timeout) fails the page unless the caller passes
+``failures``: then the tile is recorded there and the other tiles are still read.
 """
 
 from __future__ import annotations
@@ -11,6 +14,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from archrender.core.errors import ArchRenderError
 from archrender.core.schemas.document import Tile, Word
 from archrender.models.roles import OcrEngine, OcrWord
 from archrender.understand.text import fold
@@ -43,6 +47,7 @@ def ocr_tiles(
     langs: list[str],
     source: str,
     rotations: tuple[int, ...] = (0, 90),
+    failures: list[str] | None = None,
 ) -> list[Word]:
     """OCR ``page`` (H, W, 3 uint8) tile by tile; returns merged words in page pixels."""
     h, w = page.shape[:2]
@@ -52,7 +57,14 @@ def ocr_tiles(
         ch, cw = crop.shape[:2]
         for rot in rotations:
             img = crop if rot == 0 else np.ascontiguousarray(np.rot90(crop, k=-1))
-            for wd in engine.read(img, langs):
+            try:
+                read = engine.read(img, langs)
+            except ArchRenderError as e:
+                if failures is None:
+                    raise
+                failures.append(f"tile x={t.x} y={t.y} {t.w}×{t.h} px, {rot}°: {e.message}")
+                continue
+            for wd in read:
                 if wd.confidence < MIN_CONFIDENCE or not wd.text.strip():
                     continue
                 box = wd.box if rot == 0 else _unrotate(wd.box, ch)

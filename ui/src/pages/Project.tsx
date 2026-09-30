@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, post, type Doc, type Job, type Project, type Run } from "../api";
 import { ErrorBox, navigate } from "../App";
+import { Pages } from "../components/Pages";
 import { uploadFile } from "../upload";
 
 interface FileProgress { name: string; phase: string; fraction: number; result?: string; error?: unknown }
@@ -24,6 +25,7 @@ export function ProjectPage({ projectId }: { projectId: string }) {
   const [height, setHeight] = useState(2160);
   const [samples, setSamples] = useState("");
   const [policy, setPolicy] = useState("on_low_confidence");
+  const [refresh, setRefresh] = useState(0);
 
   const load = useCallback(() => {
     api<Project>(`projects/${projectId}`).then(setProject).catch(setErr);
@@ -50,6 +52,7 @@ export function ProjectPage({ projectId }: { projectId: string }) {
       }
     }
     load();
+    setRefresh((n) => n + 1);
   };
 
   const startRun = async (e: React.FormEvent) => {
@@ -110,6 +113,7 @@ export function ProjectPage({ projectId }: { projectId: string }) {
           </form>
         </div>
       </div>
+      <Pages projectId={projectId} refresh={refresh} />
       <h2>Runs</h2>
       <ul className="list">
         {runs.map((r) => (

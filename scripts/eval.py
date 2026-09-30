@@ -46,7 +46,7 @@ from archrender.pipeline.services import Services  # noqa: E402
 from archrender.pipeline.worker import Worker  # noqa: E402
 
 NOT_MEASURED = {
-    "plan": "not measured: the Phase-1 plan is a mock; extractors + metrics arrive in Phase 3",
+    "plan": "not measured: plan extractors + metrics arrive in Phase 3",
     "fault_injection": "not measured: the fault-injection harness arrives in Phase 6",
     "vram": "not recorded: no GPU model stages in this build (cpu_test profile)",
 }
@@ -201,6 +201,136 @@ def render_table(r: dict[str, Any]) -> str:
     return "\n".join(out)
 
 
+def golden_s1(workdir: Path) -> list[dict[str, Any]]:
+    """Golden projects G1/G2 through intake + S1 in the real pipeline (Phase-2 acceptance)."""
+    from archrender.core.schemas.understanding import Schedule
+    from archrender.synth.golden import g1_daire, g2_loft
+
+    settings = Settings(
+        data_dir=workdir / "golden",
+        db_path=workdir / "golden-db" / "archrender.sqlite",
+        profile="cpu_test",
+        cookie_secure=False,
+        job_lease_s=600.0,
+        worker_poll_s=0.05,
+    )
+    settings.ensure_dirs()
+    svc = Services.create(settings)
+    svc.db.migrate()
+    svc.db.execute(
+        "INSERT INTO users(id, name, role, created_at) VALUES ('usr_eval', 'eval', 'admin', ?)",
+        (now_iso(),),
+    )
+    worker = Worker(svc, ["cpu", "gpu"], name="eval-golden")
+    out = []
+    for i, make in enumerate((g1_daire, g2_loft)):
+        g = make()
+        pid = f"prj_golden{i + 1}"
+        svc.db.execute(
+            "INSERT INTO projects(id, name, created_by, created_at) VALUES (?, ?, 'usr_eval', ?)",
+            (pid, g.name, now_iso()),
+        )
+        t0 = time.perf_counter()
+        for d in g.docs:
+            upload_bytes(svc, pid, d.filename, d.data, user_id="usr_eval")
+        worker.run_until_idle()
+        failed = svc.db.query(
+            "SELECT kind, error_json FROM jobs WHERE project_id = ? AND status != ?",
+            (pid, JobStatus.SUCCEEDED.value),
+        )
+        labels = {
+            (r["filename"], r["label"])
+            for r in svc.db.query(
+                "SELECT d.filename, a.label FROM page_analysis a JOIN documents d"
+                " ON d.id = a.document_id WHERE a.project_id = ?",
+                (pid,),
+            )
+        }
+        expected = [d for d in g.docs if d.expected_class]
+        correct = [d for d in expected if (d.filename, d.expected_class) in labels]
+        rows = [
+            row
+            for r in svc.db.query(
+                "SELECT schedule_json FROM schedules WHERE project_id = ?", (pid,)
+            )
+            for row in Schedule.model_validate_json(r["schedule_json"]).rows
+            if row.tag
+        ]
+        out.append(
+            {
+                "project": g.name,
+                "documents": len(g.docs),
+                "failed_jobs": len(failed),
+                "classes": f"{len(correct)}/{len(expected)}",
+                "misclassified": sorted(
+                    f"{d.filename}→{','.join(sorted(lb for f, lb in labels if f == d.filename))}"
+                    for d in expected
+                    if d not in correct
+                ),
+                "schedule_rows_linked": f"{sum(1 for r in rows if r.links)}/{len(g.schedule_tags)}",
+                "unlinked": sorted(r.tag for r in rows if not r.links and r.tag),
+                "wall_s": round(time.perf_counter() - t0, 1),
+            }
+        )
+    return out
+
+
+def render_s1(r: dict[str, Any]) -> str:
+    c = r["classification"]
+    src = " · ".join(f"{k} F1 {v['macro_f1']:.2f} (n={v['n']})" for k, v in c["by_source"].items())
+    ocr = r["ocr_on_scans"]
+    na = r["north_arrow"]
+    sl = r["schedule_linking"]
+    rows = [
+        (
+            "S1 corpus (synthetic, held out)",
+            f"seed {r['corpus']['seed']}, {r['corpus']['n']} pages {r['corpus']['sources']}",
+        ),
+        (
+            "page classification (heuristic model)",
+            f"macro-F1 {c['macro_f1']:.3f} · acc {c['accuracy']:.3f} · review rate {c['review_rate']:.0%}"
+            f" ({c['outside_training_range']} outside training range) · errors not sent to review "
+            f"{c['errors_not_sent_to_review']}",
+        ),
+        ("  by source", src),
+        ("  top confusions", ", ".join(c["top_confusions"]) or "none"),
+        ("title-block fields (vector + scans)", r["title_block_fields"]),
+        ("scale from title block", r["scale_from_title_block"]),
+        (
+            "north arrow (vector)",
+            f"{na['measured']} measured, {na['missing']} missing, "
+            f"mean |err| {na['mean_abs_err_deg']}°, max {na['max_abs_err_deg']}°",
+        ),
+        (
+            f"OCR on scans ({ocr['engine']})",
+            f"dimensions {ocr['dimension_strings']} · title text {ocr['title_block_text']} · "
+            f"room names {ocr['room_names_exact']}",
+        ),
+        ("  Turkish char accuracy (room names)", str(ocr["turkish_char_accuracy_room_names"])),
+        ("  bubble tags", ocr["bubble_tags"]),
+        (
+            "schedule ↔ plan tags",
+            f"{sl['rows_linked']} rows linked, "
+            f"{sl['projects_fully_linked']}/{sl['projects']} projects fully linked",
+        ),
+        *(
+            (
+                f"golden {g['project']} (S0+S1 pipeline)",
+                f"classes {g['classes']} · schedule rows linked {g['schedule_rows_linked']} · "
+                f"failed jobs {g['failed_jobs']} · {g['wall_s']} s"
+                + (f" · misclassified {g['misclassified']}" if g["misclassified"] else "")
+                + (f" · unlinked {g['unlinked']}" if g["unlinked"] else ""),
+            )
+            for g in r.get("golden", [])
+        ),
+        ("VLM classification / PaddleOCR-VL", "not measured here: UNVERIFIED-ON-GPU (pod run)"),
+    ]
+    width = max(len(k) for k, _ in rows)
+    out = ["| " + "S1 metric".ljust(width) + " | value |", "|" + "-" * (width + 2) + "|---|"]
+    out += [f"| {k.ljust(width)} | {v} |" for k, v in rows]
+    return "\n".join(out)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--views", type=int, default=2)
@@ -208,6 +338,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--height", type=int, default=180)
     ap.add_argument("--samples", type=int, default=16)
     ap.add_argument("--json", type=Path, help="also write the raw results here")
+    ap.add_argument(
+        "--understanding-per-class",
+        type=int,
+        default=3,
+        help="S1 eval corpus size per class (0 = skip)",
+    )
     ap.add_argument("--keep", action="store_true", help="keep the throw-away workspace")
     args = ap.parse_args(argv)
     workdir = Path(tempfile.mkdtemp(prefix="archrender-eval-"))
@@ -217,6 +353,21 @@ def main(argv: list[str] | None = None) -> int:
         if not args.keep:
             shutil.rmtree(workdir, ignore_errors=True)
     print(render_table(result))
+    if args.understanding_per_class:
+        from archrender.understand.evaluate import evaluate as evaluate_s1
+
+        s1 = evaluate_s1(seed=3, per_class=args.understanding_per_class)
+        golden_dir = Path(tempfile.mkdtemp(prefix="archrender-eval-golden-"))
+        try:
+            s1["golden"] = golden_s1(golden_dir)
+        finally:
+            shutil.rmtree(golden_dir, ignore_errors=True)
+        result["understanding"] = s1
+        result["invariants"]["golden S0+S1 jobs succeed"] = all(
+            g["failed_jobs"] == 0 for g in s1["golden"]
+        )
+        print()
+        print(render_s1(s1))
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(result, indent=2), encoding="utf-8")

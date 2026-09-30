@@ -1,0 +1,464 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archrender.local/schemas/TitleBlock.schema.json",
+  "$defs": {
+    "BBox": {
+      "additionalProperties": false,
+      "description": "Axis-aligned box ``[x0, y0, x1, y1]`` (pixels or metres depending on context).",
+      "properties": {
+        "x0": {
+          "title": "X0",
+          "type": "number"
+        },
+        "y0": {
+          "title": "Y0",
+          "type": "number"
+        },
+        "x1": {
+          "title": "X1",
+          "type": "number"
+        },
+        "y1": {
+          "title": "Y1",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x0",
+        "y0",
+        "x1",
+        "y1"
+      ],
+      "title": "BBox",
+      "type": "object"
+    },
+    "Fact_float_": {
+      "properties": {
+        "value": {
+          "title": "Value",
+          "type": "number"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Unit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provenance": {
+          "items": {
+            "$ref": "#/$defs/Provenance"
+          },
+          "minItems": 1,
+          "title": "Provenance",
+          "type": "array"
+        },
+        "status": {
+          "default": "extracted",
+          "enum": [
+            "extracted",
+            "corroborated",
+            "conflicted",
+            "user_confirmed",
+            "assumed"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "provenance"
+      ],
+      "title": "Fact[float]",
+      "type": "object"
+    },
+    "Fact_str_": {
+      "properties": {
+        "value": {
+          "title": "Value",
+          "type": "string"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Unit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provenance": {
+          "items": {
+            "$ref": "#/$defs/Provenance"
+          },
+          "minItems": 1,
+          "title": "Provenance",
+          "type": "array"
+        },
+        "status": {
+          "default": "extracted",
+          "enum": [
+            "extracted",
+            "corroborated",
+            "conflicted",
+            "user_confirmed",
+            "assumed"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "provenance"
+      ],
+      "title": "Fact[str]",
+      "type": "object"
+    },
+    "ModelRef": {
+      "additionalProperties": false,
+      "description": "Exact identity of a model used to produce a fact or an image.",
+      "properties": {
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "repo": {
+          "title": "Repo",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "weights_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Weights Sha256"
+        },
+        "mock": {
+          "default": false,
+          "title": "Mock",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "role",
+        "name",
+        "repo"
+      ],
+      "title": "ModelRef",
+      "type": "object"
+    },
+    "Point2": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "title": "Point2",
+      "type": "object"
+    },
+    "Provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "source_doc": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Doc"
+        },
+        "page": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Page"
+        },
+        "bbox_px": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BBox"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "bbox_plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BBox"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "method": {
+          "enum": [
+            "ifc",
+            "dxf_entity",
+            "dxf_dimension",
+            "pdf_vector",
+            "pdf_text",
+            "raster_cv",
+            "raster_seg",
+            "ocr",
+            "vlm",
+            "vlm_assisted",
+            "schedule",
+            "user",
+            "default",
+            "derived",
+            "mock"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "assist": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VlmAssist"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "confidence"
+      ],
+      "title": "Provenance",
+      "type": "object"
+    },
+    "Unit": {
+      "enum": [
+        "m",
+        "cm",
+        "mm",
+        "ft",
+        "in",
+        "m2",
+        "deg",
+        "K",
+        "lm"
+      ],
+      "title": "Unit",
+      "type": "string"
+    },
+    "VlmAssist": {
+      "additionalProperties": false,
+      "description": "Record of an on-demand VLM coordinate hint and its deterministic snap (ADR-S19).",
+      "properties": {
+        "trigger": {
+          "enum": [
+            "no_candidates_with_ink",
+            "validator_failed",
+            "low_confidence",
+            "title_block_missing",
+            "north_arrow_missing",
+            "scale_bar_missing",
+            "sheet_corners_missing"
+          ],
+          "title": "Trigger",
+          "type": "string"
+        },
+        "hint_points_px": {
+          "items": {
+            "$ref": "#/$defs/Point2"
+          },
+          "title": "Hint Points Px",
+          "type": "array"
+        },
+        "hint_box_px": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BBox"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "evidence_coverage": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Evidence Coverage",
+          "type": "number"
+        },
+        "snap_residual_px": {
+          "minimum": 0.0,
+          "title": "Snap Residual Px",
+          "type": "number"
+        },
+        "accepted": {
+          "title": "Accepted",
+          "type": "boolean"
+        },
+        "user_confirmed": {
+          "default": false,
+          "title": "User Confirmed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "trigger",
+        "evidence_coverage",
+        "snap_residual_px",
+        "accepted"
+      ],
+      "title": "VlmAssist",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "page_id": {
+      "title": "Page Id",
+      "type": "string"
+    },
+    "bbox_px": {
+      "maxItems": 4,
+      "minItems": 4,
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "title": "Bbox Px",
+      "type": "array"
+    },
+    "fields": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Fact_str_"
+      },
+      "title": "Fields",
+      "type": "object"
+    },
+    "scale": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Fact_float_"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "level": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Fact_str_"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "page_id",
+    "bbox_px"
+  ],
+  "title": "TitleBlock",
+  "type": "object"
+}

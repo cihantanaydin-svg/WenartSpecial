@@ -5,9 +5,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from archrender.core.config import REPO_ROOT
+from archrender.synth.sheets import floor_plan_page
 from tests.conftest import STRICT
 from tests.e2e.conftest import Live
 from tests.helpers import MINIMAL_DXF
@@ -49,6 +51,21 @@ def test_ui_full_flow(live: Live, page, tmp_path: Path) -> None:  # type: ignore
     page.set_input_files("[data-testid=file-input]", str(plan))
     expect(page.locator(".progress-row", has_text="done")).to_be_visible(timeout=30_000)
     expect(page.locator("li", has_text="Kat Planı.dxf")).to_be_visible(timeout=10_000)
+
+    # S1 in the UI: the panel follows the analysis job, shows the class, and takes a correction
+    sheet = tmp_path / "Zemin Kat Planı.pdf"
+    sheet.write_bytes(floor_plan_page(np.random.default_rng(8)).pdf)
+    page.set_input_files("[data-testid=file-input]", str(sheet))
+    card = page.locator("[data-testid=pages] figure", has_text="Zemin Kat Planı.pdf")
+    select = card.locator("select[aria-label='page class']")
+    expect(select).to_have_value("floor_plan", timeout=120_000)
+    expect(card).to_contain_text("scale 1:")
+    select.select_option("ceiling_plan")
+    expect(card).to_contain_text("you set this (model: floor_plan)")
+    if os.environ.get("ARCHRENDER_E2E_SCREENSHOTS"):
+        page.locator("[data-testid=pages]").screenshot(
+            path=str(Path(os.environ["ARCHRENDER_E2E_SCREENSHOTS"]) / "pages_panel.png")
+        )
 
     page.fill("input[name=views]", "1")
     page.fill("input[name=width]", "96")

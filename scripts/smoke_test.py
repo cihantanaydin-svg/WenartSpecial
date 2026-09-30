@@ -4,14 +4,16 @@
     python scripts/smoke_test.py --url https://<POD>-8000.proxy.runpod.net --api-key ark_…
     python scripts/smoke_test.py --url http://127.0.0.1:8000 --bootstrap-token <admin token>
 
-Creates a project, uploads the golden input, runs a section with gate policy 'never', waits,
-downloads the bundle, and prints stage timings, render device, VRAM peaks (when recorded) and QA
-metrics. Exits non-zero on any failure.
+Creates a project, uploads the golden input plus a small raster sheet, waits for page analysis
+(S1: OCR + classifier), runs a section with gate policy 'never', waits, downloads the bundle, and
+prints the pages, stage timings, render device, VRAM peaks (when recorded) and QA metrics. Exits
+non-zero on any failure.
 """
 
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import sys
 import tempfile
@@ -28,6 +30,32 @@ GOLDEN_DXF = (
     b"0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n6\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n"
     b"0\nLINE\n8\nDUVAR\n10\n0.0\n20\n0.0\n11\n5.0\n21\n0.0\n0\nENDSEC\n0\nEOF\n"
 )
+
+
+def _sheet_png() -> bytes:
+    """A small scanned-looking sheet with Turkish text, so S1 runs OCR inside the image."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    img = Image.new("RGB", (1400, 900), "white")
+    d = ImageDraw.Draw(img)
+    font = ImageFont.load_default(size=44)
+    d.rectangle((80, 80, 1320, 820), outline="black", width=6)
+    d.text((140, 140), "ZEMİN KAT PLANI", fill="black", font=font)
+    d.text((140, 220), "Ölçek 1/50", fill="black", font=font)
+    buf = io.BytesIO()
+    img.save(buf, "PNG", dpi=(150, 150))
+    return buf.getvalue()
+
+
+def _wait_understanding(c: ArchRenderClient, project_id: str, timeout: float) -> dict | None:
+    """The latest S1 job once it ends (intake queues it before it completes), or None on timeout."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        job = c.understanding_status(project_id)
+        if job and job["status"] in ("succeeded", "failed", "cancelled"):
+            return job
+        time.sleep(2)
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -57,11 +85,28 @@ def main(argv: list[str] | None = None) -> int:
         with tempfile.TemporaryDirectory() as tmp:
             f = Path(tmp) / "Kat Planı.dxf"
             f.write_bytes(GOLDEN_DXF)
-            _, intake = c.upload(project["id"], f)
-            job = c.wait(intake, stop_at_gate=False)
-            if job["status"] != "succeeded":
-                print(f"FAIL intake: {job.get('error')}", file=sys.stderr)
-                return 1
+            sheet = Path(tmp) / "Tarama.png"
+            sheet.write_bytes(_sheet_png())
+            for path in (f, sheet):
+                _, intake = c.upload(project["id"], path)
+                job = c.wait(intake, stop_at_gate=False)
+                if job["status"] != "succeeded":
+                    print(f"FAIL intake {path.name}: {job.get('error')}", file=sys.stderr)
+                    return 1
+        s1 = _wait_understanding(c, project["id"], 900)
+        if s1 is None or s1["status"] != "succeeded":
+            print(f"FAIL page analysis (S1): {s1 and s1.get('error')}", file=sys.stderr)
+            return 1
+        pages = c.pages(project["id"])
+        print("\n== pages (S1)")
+        for pg in pages:
+            print(
+                f"  {pg['filename']:<16} {pg['label']:<14} {pg['confidence']:.2f}"
+                f"{' review' if pg['needs_review'] else ''}"
+            )
+        if len(pages) != 2 or not all(pg["analysed"] for pg in pages):
+            print(f"FAIL: expected 2 analysed pages, got {pages}", file=sys.stderr)
+            return 1
         run = c.start_run(
             project["id"],
             views=args.views,
