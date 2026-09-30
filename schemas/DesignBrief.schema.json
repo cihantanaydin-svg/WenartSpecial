@@ -1,0 +1,822 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archrender.local/schemas/DesignBrief.schema.json",
+  "$defs": {
+    "BBox": {
+      "additionalProperties": false,
+      "description": "Axis-aligned box ``[x0, y0, x1, y1]`` (pixels or metres depending on context).",
+      "properties": {
+        "x0": {
+          "title": "X0",
+          "type": "number"
+        },
+        "y0": {
+          "title": "Y0",
+          "type": "number"
+        },
+        "x1": {
+          "title": "X1",
+          "type": "number"
+        },
+        "y1": {
+          "title": "Y1",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x0",
+        "y0",
+        "x1",
+        "y1"
+      ],
+      "title": "BBox",
+      "type": "object"
+    },
+    "Conflict": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "candidates": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Candidates",
+          "type": "array"
+        },
+        "proposed": {
+          "minimum": 0,
+          "title": "Proposed",
+          "type": "integer"
+        },
+        "rule": {
+          "title": "Rule",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity",
+          "default": "warning"
+        },
+        "resolved_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved By"
+        },
+        "resolution": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolution"
+        }
+      },
+      "required": [
+        "key",
+        "candidates",
+        "proposed",
+        "rule"
+      ],
+      "title": "Conflict",
+      "type": "object"
+    },
+    "Fact_datetime_": {
+      "properties": {
+        "value": {
+          "format": "date-time",
+          "title": "Value",
+          "type": "string"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Unit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provenance": {
+          "items": {
+            "$ref": "#/$defs/Provenance"
+          },
+          "minItems": 1,
+          "title": "Provenance",
+          "type": "array"
+        },
+        "status": {
+          "default": "extracted",
+          "enum": [
+            "extracted",
+            "corroborated",
+            "conflicted",
+            "user_confirmed",
+            "assumed"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "provenance"
+      ],
+      "title": "Fact[datetime]",
+      "type": "object"
+    },
+    "Fact_float_": {
+      "properties": {
+        "value": {
+          "title": "Value",
+          "type": "number"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Unit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provenance": {
+          "items": {
+            "$ref": "#/$defs/Provenance"
+          },
+          "minItems": 1,
+          "title": "Provenance",
+          "type": "array"
+        },
+        "status": {
+          "default": "extracted",
+          "enum": [
+            "extracted",
+            "corroborated",
+            "conflicted",
+            "user_confirmed",
+            "assumed"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "provenance"
+      ],
+      "title": "Fact[float]",
+      "type": "object"
+    },
+    "Fact_str_": {
+      "properties": {
+        "value": {
+          "title": "Value",
+          "type": "string"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Unit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provenance": {
+          "items": {
+            "$ref": "#/$defs/Provenance"
+          },
+          "minItems": 1,
+          "title": "Provenance",
+          "type": "array"
+        },
+        "status": {
+          "default": "extracted",
+          "enum": [
+            "extracted",
+            "corroborated",
+            "conflicted",
+            "user_confirmed",
+            "assumed"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "provenance"
+      ],
+      "title": "Fact[str]",
+      "type": "object"
+    },
+    "FurnitureItem": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "title": "Type",
+          "type": "string"
+        },
+        "style": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Style"
+        },
+        "material": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Material"
+        },
+        "approx_size_m": {
+          "anyOf": [
+            {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approx Size M"
+        },
+        "must_have": {
+          "default": false,
+          "title": "Must Have",
+          "type": "boolean"
+        },
+        "room_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Room Id"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "FurnitureItem",
+      "type": "object"
+    },
+    "LabColor": {
+      "additionalProperties": false,
+      "properties": {
+        "L": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "L",
+          "type": "number"
+        },
+        "a": {
+          "title": "A",
+          "type": "number"
+        },
+        "b": {
+          "title": "B",
+          "type": "number"
+        }
+      },
+      "required": [
+        "L",
+        "a",
+        "b"
+      ],
+      "title": "LabColor",
+      "type": "object"
+    },
+    "Lighting": {
+      "additionalProperties": false,
+      "properties": {
+        "cct_k": {
+          "$ref": "#/$defs/Fact_float_"
+        },
+        "mood": {
+          "default": "neutral",
+          "enum": [
+            "bright",
+            "neutral",
+            "warm",
+            "evening",
+            "dramatic"
+          ],
+          "title": "Mood",
+          "type": "string"
+        },
+        "datetime_local": {
+          "$ref": "#/$defs/Fact_datetime_"
+        },
+        "timezone": {
+          "default": "Europe/Istanbul",
+          "title": "Timezone",
+          "type": "string"
+        },
+        "fixtures_from_rcp": {
+          "default": false,
+          "title": "Fixtures From Rcp",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cct_k",
+        "datetime_local"
+      ],
+      "title": "Lighting",
+      "type": "object"
+    },
+    "ModelRef": {
+      "additionalProperties": false,
+      "description": "Exact identity of a model used to produce a fact or an image.",
+      "properties": {
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "repo": {
+          "title": "Repo",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "weights_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Weights Sha256"
+        },
+        "mock": {
+          "default": false,
+          "title": "Mock",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "role",
+        "name",
+        "repo"
+      ],
+      "title": "ModelRef",
+      "type": "object"
+    },
+    "Point2": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "title": "Point2",
+      "type": "object"
+    },
+    "Provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "source_doc": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Doc"
+        },
+        "page": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Page"
+        },
+        "bbox_px": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BBox"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "bbox_plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BBox"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "method": {
+          "enum": [
+            "ifc",
+            "dxf_entity",
+            "dxf_dimension",
+            "pdf_vector",
+            "pdf_text",
+            "raster_cv",
+            "raster_seg",
+            "ocr",
+            "vlm",
+            "vlm_assisted",
+            "schedule",
+            "user",
+            "default",
+            "derived",
+            "mock"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "assist": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VlmAssist"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "confidence"
+      ],
+      "title": "Provenance",
+      "type": "object"
+    },
+    "Severity": {
+      "enum": [
+        "info",
+        "warning",
+        "error",
+        "blocker"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "SurfaceMaterial": {
+      "additionalProperties": false,
+      "properties": {
+        "surface": {
+          "title": "Surface",
+          "type": "string"
+        },
+        "material_id": {
+          "title": "Material Id",
+          "type": "string"
+        },
+        "color_lab": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LabColor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "derived": {
+          "default": false,
+          "title": "Derived",
+          "type": "boolean"
+        },
+        "paint_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Paint Code"
+        },
+        "paint_code_approximation": {
+          "default": false,
+          "title": "Paint Code Approximation",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "surface",
+        "material_id"
+      ],
+      "title": "SurfaceMaterial",
+      "type": "object"
+    },
+    "Unit": {
+      "enum": [
+        "m",
+        "cm",
+        "mm",
+        "ft",
+        "in",
+        "m2",
+        "deg",
+        "K",
+        "lm"
+      ],
+      "title": "Unit",
+      "type": "string"
+    },
+    "VlmAssist": {
+      "additionalProperties": false,
+      "description": "Record of an on-demand VLM coordinate hint and its deterministic snap (ADR-S19).",
+      "properties": {
+        "trigger": {
+          "enum": [
+            "no_candidates_with_ink",
+            "validator_failed",
+            "low_confidence",
+            "title_block_missing",
+            "north_arrow_missing",
+            "scale_bar_missing",
+            "sheet_corners_missing"
+          ],
+          "title": "Trigger",
+          "type": "string"
+        },
+        "hint_points_px": {
+          "items": {
+            "$ref": "#/$defs/Point2"
+          },
+          "title": "Hint Points Px",
+          "type": "array"
+        },
+        "hint_box_px": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BBox"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "evidence_coverage": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Evidence Coverage",
+          "type": "number"
+        },
+        "snap_residual_px": {
+          "minimum": 0.0,
+          "title": "Snap Residual Px",
+          "type": "number"
+        },
+        "accepted": {
+          "title": "Accepted",
+          "type": "boolean"
+        },
+        "user_confirmed": {
+          "default": false,
+          "title": "User Confirmed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "trigger",
+        "evidence_coverage",
+        "snap_residual_px",
+        "accepted"
+      ],
+      "title": "VlmAssist",
+      "type": "object"
+    },
+    "WeightedColor": {
+      "additionalProperties": false,
+      "properties": {
+        "lab": {
+          "$ref": "#/$defs/LabColor"
+        },
+        "weight": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Weight",
+          "type": "number"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        }
+      },
+      "required": [
+        "lab",
+        "weight"
+      ],
+      "title": "WeightedColor",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "section_id": {
+      "title": "Section Id",
+      "type": "string"
+    },
+    "style": {
+      "$ref": "#/$defs/Fact_str_"
+    },
+    "palette": {
+      "items": {
+        "$ref": "#/$defs/WeightedColor"
+      },
+      "title": "Palette",
+      "type": "array"
+    },
+    "surfaces": {
+      "items": {
+        "$ref": "#/$defs/SurfaceMaterial"
+      },
+      "title": "Surfaces",
+      "type": "array"
+    },
+    "furniture": {
+      "items": {
+        "$ref": "#/$defs/FurnitureItem"
+      },
+      "title": "Furniture",
+      "type": "array"
+    },
+    "lighting": {
+      "$ref": "#/$defs/Lighting"
+    },
+    "decor_density": {
+      "default": "low",
+      "enum": [
+        "none",
+        "low",
+        "medium",
+        "high"
+      ],
+      "title": "Decor Density",
+      "type": "string"
+    },
+    "keep": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Keep",
+      "type": "array"
+    },
+    "avoid": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Avoid",
+      "type": "array"
+    },
+    "contradictions": {
+      "items": {
+        "$ref": "#/$defs/Conflict"
+      },
+      "title": "Contradictions",
+      "type": "array"
+    }
+  },
+  "required": [
+    "section_id",
+    "style",
+    "lighting"
+  ],
+  "title": "DesignBrief",
+  "type": "object"
+}

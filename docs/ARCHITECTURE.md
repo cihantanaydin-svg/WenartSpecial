@@ -560,8 +560,8 @@ confidence. Deterministic metrics override the VLM on anything geometric.
 attempt(view, seed, strength_map, control_weight)
   geometry fail → strength ×0.7, control +0.2   (≤2 times)
                → new seed (reset params)          (repeat)  … up to K=4 total retries
-               → hard structural composite (Cycles pixels in structural masks, Poisson-blended
-                 borders), re-QA'd like any candidate
+               → hard structural composite (Cycles pixels in structural masks, feathered
+                 borders; ADR-S07), re-QA'd like any candidate
                → FALLBACK: deliver the Cycles base render (flagged), never the failing image
   brief fail   → deterministic fix first (wrong material binding / missing asset → S5 re-run),
                  then prompt emphasis template, then Gate D with evidence

@@ -6,7 +6,7 @@ BLENDER_VENV := .venv-blender
 BLENDER_VERSION := 5.2.2
 
 .PHONY: help setup setup-blender ui lint typecheck test test-fast e2e eval schemas license-audit \
-        dev-server dev-worker docker-build docker-build-local deploy-dry-run clean
+        dev-server dev-worker docker-build docker-build-local docker-smoke deploy-dry-run clean
 
 help:
 	@echo "setup           install app + dev deps (uv), Playwright uses /opt/pw-browsers"
@@ -18,6 +18,7 @@ help:
 	@echo "eval            print the evaluation table (CPU subset)"
 	@echo "schemas         export JSON Schema for all pydantic schemas"
 	@echo "license-audit   check dependency/model/asset licences, write THIRD_PARTY_LICENSES.md"
+	@echo "docker-build-local / docker-smoke  CPU image (bpy wheel) and a boot + end-to-end smoke test"
 	@echo "deploy-dry-run  print every RunPod API payload without calling the API"
 
 setup:
@@ -25,7 +26,7 @@ setup:
 
 setup-blender:
 	$(UV) venv -q -p 3.13 $(BLENDER_VENV)
-	$(UV) pip install -q -p $(BLENDER_VENV)/bin/python bpy==$(BLENDER_VERSION)
+	$(UV) pip install -q -p $(BLENDER_VENV)/bin/python --require-hashes -r deploy/blender/requirements.lock
 	$(BLENDER_VENV)/bin/python -c "import bpy; print('bpy', bpy.app.version_string)"
 
 ui:
@@ -73,6 +74,9 @@ docker-build-local:
 	docker build -f deploy/Dockerfile --build-arg BLENDER_SOURCE=wheel --build-arg APP_EXTRAS= \
 	  --build-arg BASE_IMAGE=$(UBUNTU_IMAGE) --build-arg GIT_COMMIT=$$(git rev-parse --short HEAD) \
 	  $(if $(DOCKER_EXTRA_CA),--secret id=extra_ca$(comma)src=$(DOCKER_EXTRA_CA),) -t archrender:local .
+
+docker-smoke:
+	scripts/container_smoke.sh archrender:local
 
 # Uses deploy/runpod/.env when present; otherwise the example with placeholder credentials
 # (secret values are always masked in the output).

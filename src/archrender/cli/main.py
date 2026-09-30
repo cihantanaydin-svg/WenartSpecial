@@ -53,7 +53,10 @@ def _event_line(ev: dict[str, Any]) -> None:
 
 def cmd_bootstrap(args: argparse.Namespace) -> int:
     res = _client(args).bootstrap(args.token, args.name)
-    print(f"admin api key (shown once): {res['api_key']}")
+    if args.json:
+        _print(res, True)
+    else:
+        print(f"admin api key (shown once): {res['api_key']}")
     return 0
 
 
@@ -102,6 +105,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         config["samples"] = args.samples
     if args.rooms:
         config["room_ids"] = args.rooms.split(",")
+    if args.material:
+        pairs = [m.partition("=") for m in args.material]
+        bad = [m for m, (_, sep, v) in zip(args.material, pairs, strict=True) if not sep or not v]
+        if bad:
+            print(f"--material expects SURFACE=MATERIAL_ID, got {bad}", file=sys.stderr)
+            return 2
+        config["materials"] = {k: v for k, _, v in pairs}
     res = c.start_run(args.project, **config)
     print(f"run {res['run_id']} (job {res['job_id']})")
     if args.wait:
@@ -173,26 +183,38 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--url", default=os.environ.get("ARCHRENDER_URL"))
     p.add_argument("--api-key", default=os.environ.get("ARCHRENDER_API_KEY"))
     p.add_argument("--json", action="store_true", help="machine-readable output")
+    # The same options are also accepted after the subcommand (`archrender run --url …`).
+    # SUPPRESS keeps an absent option from overwriting the value parsed before the subcommand.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--url", default=argparse.SUPPRESS, help="server URL (env ARCHRENDER_URL)")
+    common.add_argument(
+        "--api-key", default=argparse.SUPPRESS, help="API key (env ARCHRENDER_API_KEY)"
+    )
+    common.add_argument(
+        "--json", action="store_true", default=argparse.SUPPRESS, help="machine-readable output"
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    b = sub.add_parser("bootstrap", help="exchange the bootstrap token for the first admin key")
+    b = sub.add_parser(
+        "bootstrap", parents=[common], help="exchange the bootstrap token for the first admin key"
+    )
     b.add_argument("--token", required=True)
     b.add_argument("--name", default="admin")
     b.set_defaults(fn=cmd_bootstrap)
 
-    pr = sub.add_parser("project", help="create or list projects")
+    pr = sub.add_parser("project", parents=[common], help="create or list projects")
     pr.add_argument("action", choices=["create", "list"])
     pr.add_argument("name", nargs="?")
     pr.add_argument("--lat", type=float)
     pr.add_argument("--lon", type=float)
     pr.set_defaults(fn=cmd_project)
 
-    up = sub.add_parser("upload", help="upload documents (resumable, chunked)")
+    up = sub.add_parser("upload", parents=[common], help="upload documents (resumable, chunked)")
     up.add_argument("project")
     up.add_argument("files", nargs="+")
     up.set_defaults(fn=cmd_upload)
 
-    r = sub.add_parser("run", help="start a section run")
+    r = sub.add_parser("run", parents=[common], help="start a section run")
     r.add_argument("project")
     r.add_argument("--rooms", help="comma-separated room ids (default: all rooms)")
     r.add_argument("--views", type=int, default=3)
@@ -207,23 +229,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     r.add_argument("--blend", action="store_true", help="include the .blend file in the bundle")
     r.add_argument(
+        "--material",
+        action="append",
+        default=[],
+        metavar="SURFACE=MATERIAL_ID",
+        help="material choice, e.g. floor=stone_porcelain_grey or wall:W1=paint_warm_white (repeatable)",
+    )
+    r.add_argument(
         "--wait", action="store_true", help="follow progress until done or a gate needs review"
     )
     r.set_defaults(fn=cmd_run)
 
-    s = sub.add_parser("status", help="show a run (run_…) or job (job_…)")
+    s = sub.add_parser("status", parents=[common], help="show a run (run_…) or job (job_…)")
     s.add_argument("id")
     s.add_argument("--follow", action="store_true")
     s.set_defaults(fn=cmd_status)
 
-    g = sub.add_parser("gate", help="approve or reject a pending gate")
+    g = sub.add_parser("gate", parents=[common], help="approve or reject a pending gate")
     g.add_argument("action", choices=["approve", "reject"])
     g.add_argument("run")
     g.add_argument("gate", choices=["A_plan", "B_brief", "C_cameras", "D_final"])
     g.add_argument("--notes")
     g.set_defaults(fn=cmd_gate)
 
-    d = sub.add_parser("download", help="download a run's bundle (resumable)")
+    d = sub.add_parser("download", parents=[common], help="download a run's bundle (resumable)")
     d.add_argument("run")
     d.add_argument("-o", "--output")
     d.set_defaults(fn=cmd_download)

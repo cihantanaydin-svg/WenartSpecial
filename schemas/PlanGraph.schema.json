@@ -1,0 +1,1171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archrender.local/schemas/PlanGraph.schema.json",
+  "$defs": {
+    "Arc": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "arc",
+          "default": "arc",
+          "title": "Kind",
+          "type": "string"
+        },
+        "center": {
+          "$ref": "#/$defs/Point2"
+        },
+        "radius": {
+          "exclusiveMinimum": 0,
+          "title": "Radius",
+          "type": "number"
+        },
+        "start_deg": {
+          "title": "Start Deg",
+          "type": "number"
+        },
+        "end_deg": {
+          "title": "End Deg",
+          "type": "number"
+        }
+      },
+      "required": [
+        "center",
+        "radius",
+        "start_deg",
+        "end_deg"
+      ],
+      "title": "Arc",
+      "type": "object"
+    },
+    "Assumption": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "stage": {
+          "title": "Stage",
+          "type": "string"
+        },
+        "overridable": {
+          "default": true,
+          "title": "Overridable",
+          "type": "boolean"
+        },
+        "requires_review": {
+          "default": false,
+          "title": "Requires Review",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "key",
+        "value",
+        "reason",
+        "stage"
+      ],
+      "title": "Assumption",
+      "type": "object"
+    },
+    "BBox": {
+      "additionalProperties": false,
+      "description": "Axis-aligned box ``[x0, y0, x1, y1]`` (pixels or metres depending on context).",
+      "properties": {
+        "x0": {
+          "title": "X0",
+          "type": "number"
+        },
+        "y0": {
+          "title": "Y0",
+          "type": "number"
+        },
+        "x1": {
+          "title": "X1",
+          "type": "number"
+        },
+        "y1": {
+          "title": "Y1",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x0",
+        "y0",
+        "x1",
+        "y1"
+      ],
+      "title": "BBox",
+      "type": "object"
+    },
+    "Column": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "level": {
+          "title": "Level",
+          "type": "string"
+        },
+        "footprint": {
+          "items": {
+            "$ref": "#/$defs/Point2"
+          },
+          "minItems": 3,
+          "title": "Footprint",
+          "type": "array"
+        },
+        "height_m": {
+          "$ref": "#/$defs/Fact_float_"
+        }
+      },
+      "required": [
+        "id",
+        "level",
+        "footprint",
+        "height_m"
+      ],
+      "title": "Column",
+      "type": "object"
+    },
+    "Conflict": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "candidates": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Candidates",
+          "type": "array"
+        },
+        "proposed": {
+          "minimum": 0,
+          "title": "Proposed",
+          "type": "integer"
+        },
+        "rule": {
+          "title": "Rule",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity",
+          "default": "warning"
+        },
+        "resolved_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved By"
+        },
+        "resolution": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolution"
+        }
+      },
+      "required": [
+        "key",
+        "candidates",
+        "proposed",
+        "rule"
+      ],
+      "title": "Conflict",
+      "type": "object"
+    },
+    "DocTransform": {
+      "additionalProperties": false,
+      "description": "Affine ``[[a, b, tx], [c, d, ty]]`` mapping document units to plan metres.",
+      "properties": {
+        "doc_id": {
+          "title": "Doc Id",
+          "type": "string"
+        },
+        "page": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Page"
+        },
+        "matrix": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            }
+          ],
+          "title": "Matrix",
+          "type": "array"
+        },
+        "residual_m": {
+          "default": 0.0,
+          "title": "Residual M",
+          "type": "number"
+        },
+        "method": {
+          "title": "Method",
+          "type": "string"
+        }
+      },
+      "required": [
+        "doc_id",
+        "matrix",
+        "method"
+      ],
+      "title": "DocTransform",
+      "type": "object"
+    },
+    "Fact_Literal__living____kitchen____dining____bedroom____bathroom____wc____entrance____corridor____balcony____storage____office____meeting____utility____other___": {
+      "properties": {
+        "value": {
+          "enum": [
+            "living",
+            "kitchen",
+            "dining",
+            "bedroom",
+            "bathroom",
+            "wc",
+            "entrance",
+            "corridor",
+            "balcony",
+            "storage",
+            "office",
+            "meeting",
+            "utility",
+            "other"
+          ],
+          "title": "Value",
+          "type": "string"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Unit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provenance": {
+          "items": {
+            "$ref": "#/$defs/Provenance"
+          },
+          "minItems": 1,
+          "title": "Provenance",
+          "type": "array"
+        },
+        "status": {
+          "default": "extracted",
+          "enum": [
+            "extracted",
+            "corroborated",
+            "conflicted",
+            "user_confirmed",
+            "assumed"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "provenance"
+      ],
+      "title": "Fact[Literal['living', 'kitchen', 'dining', 'bedroom', 'bathroom', 'wc', 'entrance', 'corridor', 'balcony', 'storage', 'office', 'meeting', 'utility', 'other']]",
+      "type": "object"
+    },
+    "Fact_float_": {
+      "properties": {
+        "value": {
+          "title": "Value",
+          "type": "number"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Unit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provenance": {
+          "items": {
+            "$ref": "#/$defs/Provenance"
+          },
+          "minItems": 1,
+          "title": "Provenance",
+          "type": "array"
+        },
+        "status": {
+          "default": "extracted",
+          "enum": [
+            "extracted",
+            "corroborated",
+            "conflicted",
+            "user_confirmed",
+            "assumed"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "provenance"
+      ],
+      "title": "Fact[float]",
+      "type": "object"
+    },
+    "Fact_str_": {
+      "properties": {
+        "value": {
+          "title": "Value",
+          "type": "string"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Unit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provenance": {
+          "items": {
+            "$ref": "#/$defs/Provenance"
+          },
+          "minItems": 1,
+          "title": "Provenance",
+          "type": "array"
+        },
+        "status": {
+          "default": "extracted",
+          "enum": [
+            "extracted",
+            "corroborated",
+            "conflicted",
+            "user_confirmed",
+            "assumed"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "provenance"
+      ],
+      "title": "Fact[str]",
+      "type": "object"
+    },
+    "Level": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "elevation_m": {
+          "default": 0.0,
+          "title": "Elevation M",
+          "type": "number"
+        },
+        "floor_to_floor_m": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fact_float_"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "Level",
+      "type": "object"
+    },
+    "ModelRef": {
+      "additionalProperties": false,
+      "description": "Exact identity of a model used to produce a fact or an image.",
+      "properties": {
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "repo": {
+          "title": "Repo",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "weights_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Weights Sha256"
+        },
+        "mock": {
+          "default": false,
+          "title": "Mock",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "role",
+        "name",
+        "repo"
+      ],
+      "title": "ModelRef",
+      "type": "object"
+    },
+    "Opening": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "host_wall": {
+          "title": "Host Wall",
+          "type": "string"
+        },
+        "offset_m": {
+          "$ref": "#/$defs/Fact_float_"
+        },
+        "width_m": {
+          "$ref": "#/$defs/Fact_float_"
+        },
+        "height_m": {
+          "$ref": "#/$defs/Fact_float_"
+        },
+        "sill_m": {
+          "$ref": "#/$defs/Fact_float_"
+        },
+        "type": {
+          "enum": [
+            "door",
+            "double_door",
+            "sliding_door",
+            "french_door",
+            "window",
+            "opening",
+            "pass"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "hinge": {
+          "anyOf": [
+            {
+              "enum": [
+                "start",
+                "end"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hinge"
+        },
+        "swing": {
+          "anyOf": [
+            {
+              "enum": [
+                "left",
+                "right",
+                "none"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Swing"
+        },
+        "swing_side": {
+          "anyOf": [
+            {
+              "enum": [
+                "pos",
+                "neg"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Swing Side"
+        },
+        "tag": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tag"
+        }
+      },
+      "required": [
+        "id",
+        "host_wall",
+        "offset_m",
+        "width_m",
+        "height_m",
+        "sill_m",
+        "type"
+      ],
+      "title": "Opening",
+      "type": "object"
+    },
+    "Point2": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "title": "Point2",
+      "type": "object"
+    },
+    "Provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "source_doc": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Doc"
+        },
+        "page": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Page"
+        },
+        "bbox_px": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BBox"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "bbox_plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BBox"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "method": {
+          "enum": [
+            "ifc",
+            "dxf_entity",
+            "dxf_dimension",
+            "pdf_vector",
+            "pdf_text",
+            "raster_cv",
+            "raster_seg",
+            "ocr",
+            "vlm",
+            "vlm_assisted",
+            "schedule",
+            "user",
+            "default",
+            "derived",
+            "mock"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "assist": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VlmAssist"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "confidence"
+      ],
+      "title": "Provenance",
+      "type": "object"
+    },
+    "Room": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "level": {
+          "title": "Level",
+          "type": "string"
+        },
+        "polygon": {
+          "items": {
+            "$ref": "#/$defs/Point2"
+          },
+          "minItems": 3,
+          "title": "Polygon",
+          "type": "array"
+        },
+        "holes": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/Point2"
+            },
+            "type": "array"
+          },
+          "title": "Holes",
+          "type": "array"
+        },
+        "name": {
+          "$ref": "#/$defs/Fact_str_"
+        },
+        "number": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fact_str_"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "$ref": "#/$defs/Fact_Literal__living____kitchen____dining____bedroom____bathroom____wc____entrance____corridor____balcony____storage____office____meeting____utility____other___"
+        },
+        "area_label_m2": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fact_float_"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "ceiling_height_m": {
+          "$ref": "#/$defs/Fact_float_"
+        },
+        "double_height": {
+          "default": false,
+          "title": "Double Height",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "level",
+        "polygon",
+        "name",
+        "type",
+        "ceiling_height_m"
+      ],
+      "title": "Room",
+      "type": "object"
+    },
+    "Segment": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "segment",
+          "default": "segment",
+          "title": "Kind",
+          "type": "string"
+        },
+        "a": {
+          "$ref": "#/$defs/Point2"
+        },
+        "b": {
+          "$ref": "#/$defs/Point2"
+        }
+      },
+      "required": [
+        "a",
+        "b"
+      ],
+      "title": "Segment",
+      "type": "object"
+    },
+    "Severity": {
+      "enum": [
+        "info",
+        "warning",
+        "error",
+        "blocker"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "Unit": {
+      "enum": [
+        "m",
+        "cm",
+        "mm",
+        "ft",
+        "in",
+        "m2",
+        "deg",
+        "K",
+        "lm"
+      ],
+      "title": "Unit",
+      "type": "string"
+    },
+    "ValidationIssue": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "fix_hint": {
+          "title": "Fix Hint",
+          "type": "string"
+        },
+        "element_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Element Ids",
+          "type": "array"
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Point2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "code",
+        "severity",
+        "message",
+        "fix_hint"
+      ],
+      "title": "ValidationIssue",
+      "type": "object"
+    },
+    "VlmAssist": {
+      "additionalProperties": false,
+      "description": "Record of an on-demand VLM coordinate hint and its deterministic snap (ADR-S19).",
+      "properties": {
+        "trigger": {
+          "enum": [
+            "no_candidates_with_ink",
+            "validator_failed",
+            "low_confidence",
+            "title_block_missing",
+            "north_arrow_missing",
+            "scale_bar_missing",
+            "sheet_corners_missing"
+          ],
+          "title": "Trigger",
+          "type": "string"
+        },
+        "hint_points_px": {
+          "items": {
+            "$ref": "#/$defs/Point2"
+          },
+          "title": "Hint Points Px",
+          "type": "array"
+        },
+        "hint_box_px": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BBox"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "evidence_coverage": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Evidence Coverage",
+          "type": "number"
+        },
+        "snap_residual_px": {
+          "minimum": 0.0,
+          "title": "Snap Residual Px",
+          "type": "number"
+        },
+        "accepted": {
+          "title": "Accepted",
+          "type": "boolean"
+        },
+        "user_confirmed": {
+          "default": false,
+          "title": "User Confirmed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "trigger",
+        "evidence_coverage",
+        "snap_residual_px",
+        "accepted"
+      ],
+      "title": "VlmAssist",
+      "type": "object"
+    },
+    "Wall": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "level": {
+          "title": "Level",
+          "type": "string"
+        },
+        "centerline": {
+          "discriminator": {
+            "mapping": {
+              "arc": "#/$defs/Arc",
+              "segment": "#/$defs/Segment"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Segment"
+            },
+            {
+              "$ref": "#/$defs/Arc"
+            }
+          ],
+          "title": "Centerline"
+        },
+        "thickness_m": {
+          "$ref": "#/$defs/Fact_float_"
+        },
+        "height_m": {
+          "$ref": "#/$defs/Fact_float_"
+        },
+        "base_offset_m": {
+          "default": 0.0,
+          "title": "Base Offset M",
+          "type": "number"
+        },
+        "kind": {
+          "default": "unknown",
+          "enum": [
+            "exterior",
+            "interior",
+            "partition",
+            "curtain",
+            "unknown"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "level",
+        "centerline",
+        "thickness_m",
+        "height_m"
+      ],
+      "title": "Wall",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "title": "Version",
+      "type": "string"
+    },
+    "project": {
+      "title": "Project",
+      "type": "string"
+    },
+    "levels": {
+      "items": {
+        "$ref": "#/$defs/Level"
+      },
+      "minItems": 1,
+      "title": "Levels",
+      "type": "array"
+    },
+    "north_angle_deg": {
+      "$ref": "#/$defs/Fact_float_"
+    },
+    "doc_transforms": {
+      "items": {
+        "$ref": "#/$defs/DocTransform"
+      },
+      "title": "Doc Transforms",
+      "type": "array"
+    },
+    "walls": {
+      "items": {
+        "$ref": "#/$defs/Wall"
+      },
+      "title": "Walls",
+      "type": "array"
+    },
+    "openings": {
+      "items": {
+        "$ref": "#/$defs/Opening"
+      },
+      "title": "Openings",
+      "type": "array"
+    },
+    "rooms": {
+      "items": {
+        "$ref": "#/$defs/Room"
+      },
+      "title": "Rooms",
+      "type": "array"
+    },
+    "columns": {
+      "items": {
+        "$ref": "#/$defs/Column"
+      },
+      "title": "Columns",
+      "type": "array"
+    },
+    "issues": {
+      "items": {
+        "$ref": "#/$defs/ValidationIssue"
+      },
+      "title": "Issues",
+      "type": "array"
+    },
+    "conflicts": {
+      "items": {
+        "$ref": "#/$defs/Conflict"
+      },
+      "title": "Conflicts",
+      "type": "array"
+    },
+    "assumptions": {
+      "items": {
+        "$ref": "#/$defs/Assumption"
+      },
+      "title": "Assumptions",
+      "type": "array"
+    },
+    "source": {
+      "enum": [
+        "ifc",
+        "dxf",
+        "pdf_vector",
+        "raster",
+        "mock",
+        "user"
+      ],
+      "title": "Source",
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "project",
+    "levels",
+    "north_angle_deg",
+    "source"
+  ],
+  "title": "PlanGraph",
+  "type": "object"
+}

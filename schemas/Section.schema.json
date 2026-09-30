@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archrender.local/schemas/Section.schema.json",
+  "$defs": {
+    "CutLine": {
+      "additionalProperties": false,
+      "properties": {
+        "p0": {
+          "$ref": "#/$defs/Point2"
+        },
+        "p1": {
+          "$ref": "#/$defs/Point2"
+        },
+        "view_dir": {
+          "default": "left",
+          "enum": [
+            "left",
+            "right"
+          ],
+          "title": "View Dir",
+          "type": "string"
+        },
+        "depth_m": {
+          "default": 8.0,
+          "exclusiveMinimum": 0,
+          "title": "Depth M",
+          "type": "number"
+        }
+      },
+      "required": [
+        "p0",
+        "p1"
+      ],
+      "title": "CutLine",
+      "type": "object"
+    },
+    "Deliverables": {
+      "additionalProperties": false,
+      "properties": {
+        "views": {
+          "default": 3,
+          "maximum": 12,
+          "minimum": 1,
+          "title": "Views",
+          "type": "integer"
+        },
+        "width": {
+          "default": 3840,
+          "maximum": 8192,
+          "minimum": 64,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "default": 2160,
+          "maximum": 8192,
+          "minimum": 36,
+          "title": "Height",
+          "type": "integer"
+        },
+        "cutaway": {
+          "default": true,
+          "title": "Cutaway",
+          "type": "boolean"
+        },
+        "section_perspective": {
+          "default": false,
+          "title": "Section Perspective",
+          "type": "boolean"
+        },
+        "panorama": {
+          "default": false,
+          "title": "Panorama",
+          "type": "boolean"
+        },
+        "blend_file": {
+          "default": false,
+          "title": "Blend File",
+          "type": "boolean"
+        },
+        "exr": {
+          "default": false,
+          "title": "Exr",
+          "type": "boolean"
+        },
+        "people": {
+          "const": false,
+          "default": false,
+          "title": "People",
+          "type": "boolean"
+        }
+      },
+      "title": "Deliverables",
+      "type": "object"
+    },
+    "Point2": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "title": "Point2",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "level": {
+      "title": "Level",
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "rooms",
+        "polygon",
+        "cutline"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "room_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Room Ids",
+      "type": "array"
+    },
+    "polygon": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/Point2"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Polygon"
+    },
+    "cut": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CutLine"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "mode": {
+      "default": "faithful",
+      "enum": [
+        "faithful",
+        "concept"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "deliverables": {
+      "$ref": "#/$defs/Deliverables"
+    }
+  },
+  "required": [
+    "id",
+    "level",
+    "kind"
+  ],
+  "title": "Section",
+  "type": "object"
+}

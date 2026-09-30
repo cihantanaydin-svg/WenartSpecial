@@ -105,6 +105,66 @@ def test_rerun_hits_cache_and_policy_never(svc: Services, project_id: str) -> No
     assert all(t["cached"] for t in r2["timings"]), r2["timings"]
 
 
+def test_changing_floor_material_reruns_only_scene_onwards(svc: Services, project_id: str) -> None:
+    worker = Worker(svc, ["cpu", "gpu"], name="w")
+    upload_bytes(svc, project_id, "plan.dxf", MINIMAL_DXF)
+    worker.run_until_idle()
+    _, j1 = _run(svc, project_id, gate_policy="never")
+    worker.run_until_idle()
+    assert svc.queue.get(j1).status == JobStatus.SUCCEEDED
+    run2, j2 = _run(
+        svc, project_id, gate_policy="never", materials={"floor": "stone_porcelain_grey"}
+    )
+    worker.run_until_idle()
+    job = svc.queue.get(j2)
+    assert job.status == JobStatus.SUCCEEDED, job.error
+    assert job.result is not None
+    cached = {t["stage"]: t["cached"] for t in job.result["timings"]}
+    # material choices do not change the plan, brief extraction or camera placement …
+    assert cached["S2_plan"] and cached["S4_brief"] and cached["S6_cameras"], cached
+    # … but everything that depends on the scene re-runs
+    assert not cached["S5_scene"] and not cached["S7_render"], cached
+    assert not any(v for k, v in cached.items() if k.startswith("S8")), cached
+    evidence = json.loads(
+        svc.db.one(
+            "SELECT evidence_json FROM gates WHERE run_id = ? AND gate = 'B_brief'", (run2,)
+        )["evidence_json"]
+    )
+    assert evidence["material_overrides"] == {"floor": "stone_porcelain_grey"}
+    assert "floor_material" not in {a["key"] for a in evidence["assumptions"]}
+
+
+@pytest.mark.parametrize(
+    ("materials", "message"),
+    [
+        ({"floor": "paint_warm_white"}, "is a wall material"),
+        ({"floor": "no_such_material"}, "not in the library"),
+        ({"roof": "oak_floor_natural"}, "Unknown surface"),
+    ],
+)
+def test_invalid_material_overrides_are_rejected_up_front(
+    svc: Services, project_id: str, materials: dict[str, str], message: str
+) -> None:
+    from archrender.core.errors import ArchRenderError, ErrorCode
+
+    with pytest.raises(ArchRenderError) as e:
+        _run(svc, project_id, materials=materials)
+    assert e.value.code == ErrorCode.VALIDATION and message in e.value.message
+
+
+def test_unknown_plan_element_in_override_fails_the_run(svc: Services, project_id: str) -> None:
+    worker = Worker(svc, ["cpu", "gpu"], name="w")
+    upload_bytes(svc, project_id, "plan.dxf", MINIMAL_DXF)
+    worker.run_until_idle()
+    _, job_id = _run(
+        svc, project_id, gate_policy="never", materials={"wall:W99": "paint_warm_white"}
+    )
+    worker.run_until_idle()
+    job = svc.queue.get(job_id)
+    assert job.status == JobStatus.FAILED and job.error is not None
+    assert job.error.code == "VALIDATION" and "W99" in job.error.message
+
+
 def test_rejected_gate_fails_run(svc: Services, project_id: str) -> None:
     worker = Worker(svc, ["cpu", "gpu"], name="w")
     upload_bytes(svc, project_id, "plan.dxf", MINIMAL_DXF)

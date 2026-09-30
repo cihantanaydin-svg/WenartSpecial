@@ -35,6 +35,7 @@ button.danger { background: var(--bad); border-color: var(--bad); }
 .progress-row { display: grid; grid-template-columns: 1fr 140px 90px; gap: 8px; align-items: center; margin: 4px 0; }
 .views { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
 .view { margin: 0; }
+.view.open { grid-column: 1 / -1; } /* QA details need the full row */
 .compare { position: relative; line-height: 0; }
 .compare img { width: 100%; display: block; }
 .compare-top { position: absolute; inset: 0; }

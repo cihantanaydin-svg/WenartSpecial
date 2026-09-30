@@ -17,7 +17,7 @@ from typing import Any
 
 import yaml
 
-from archrender.core.config import REPO_ROOT
+from archrender.core.config import get_settings
 from archrender.models.license_gate import LicenseGate
 from archrender.models.profiles import HardwareProfile
 from archrender.models.registry import Registry
@@ -131,7 +131,7 @@ def prod_names() -> set[str] | None:
                 "--format",
                 "requirements-txt",
             ],
-            cwd=REPO_ROOT,
+            cwd=get_settings().app_root(),
             capture_output=True,
             text=True,
             check=True,
@@ -160,7 +160,8 @@ SUBPROCESS_EXTRA = {
 def audit(
     pythons: list[str | None], prod_only: bool, subprocess_pythons: list[str] | None = None
 ) -> tuple[list[Pkg], list[str], dict[str, Any]]:
-    cfg = yaml.safe_load((REPO_ROOT / "configs" / "licenses.yaml").read_text())["packages"]
+    configs = get_settings().configs_dir
+    cfg = yaml.safe_load((configs / "licenses.yaml").read_text())["packages"]
     allowed, blocked = set(cfg["allowed"]), set(cfg["blocked"])
     blocked_names = {n.lower() for n in cfg["blocked_names"]}
     verified = {k.lower(): v for k, v in (cfg.get("verified") or {}).items()}
@@ -198,7 +199,7 @@ def audit(
             elif not allowed_expression(lic, env_allowed, env_blocked):
                 problems.append(f"{env}: {name} {d['version']} licence '{lic}' is not allowed")
     npm: list[Pkg] = []
-    lock = REPO_ROOT / "ui" / "package-lock.json"
+    lock = get_settings().app_root() / "ui" / "package-lock.json"
     if lock.exists():
         data = json.loads(lock.read_text())
         for path, meta in data.get("packages", {}).items():
@@ -209,11 +210,11 @@ def audit(
             npm.append(Pkg(name, meta.get("version", "?"), lic, "package-lock", "ui"))
             if not allowed_expression(lic, allowed, blocked):
                 problems.append(f"ui: npm {name} licence '{lic}' is not allowed")
-    registry = Registry.load(REPO_ROOT / "configs")
-    gate = LicenseGate.load(REPO_ROOT / "configs")
+    registry = Registry.load(configs)
+    gate = LicenseGate.load(configs)
     used: dict[str, list[str]] = {}
     for prof in ("cpu_test", "gpu48", "gpu80", "gpu96plus"):
-        for role, name in HardwareProfile.load(REPO_ROOT / "configs", prof).roles.items():
+        for role, name in HardwareProfile.load(configs, prof).roles.items():
             used.setdefault(name, []).append(f"{prof}:{role}")
     models = []
     for e in registry.entries():
@@ -271,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--prod-only", action="store_true", help="skip dev-only packages of the app env"
     )
-    ap.add_argument("--out", default=str(REPO_ROOT / "THIRD_PARTY_LICENSES.md"))
+    ap.add_argument("--out", default=str(get_settings().app_root() / "THIRD_PARTY_LICENSES.md"))
     args = ap.parse_args(argv)
     pythons: list[str | None] = [None, *args.python]
     pkgs, problems, extra = audit(pythons, args.prod_only, args.subprocess_python)

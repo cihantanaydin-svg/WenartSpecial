@@ -101,11 +101,21 @@ diffusers source), so protection has to be our own code.
    higher), in `callback_on_step_end`. This is differential-diffusion style. Depth and edge maps go
    in as in-context images.
 2. **Escalation rung (after the strength-reduction retries fail geometry QA):** a hard composite
-   that keeps the Cycles pixels inside the structural masks, with gradient-domain (Poisson) blending
-   at the mask borders. The result is re-QA'd like any candidate.
+   that keeps the Cycles pixels inside the structural masks, with a feathered blend at the mask
+   borders (see the amendment below). The result is re-QA'd like any candidate.
 3. **Final rung:** the pure Cycles render.
 **Consequences.** Coherent lighting and bounded geometric freedom. Requires pipeline-level code per
 model family (the wrapper is covered by mocks on CPU and by fault injection on GPU).
+**Amendment (Phase 1, 2026-09-30): feathered alpha blend instead of Poisson blending.** Phase 0
+proposed gradient-domain (Poisson) blending at the borders. Poisson blending solves for the colours
+of the *whole* masked region so that they match the surrounding refined image. That re-colours the
+Cycles pixels this rung exists to keep, and QA's relative colour checks would then compare against
+pixels that are no longer the render. The implementation
+(`refine/strength.py:hard_structural_composite`) uses a Gaussian-feathered alpha of the structural
+mask (σ = image width / 800, at least 1 px): structural pixels are kept exactly except within a band
+of about 2σ either side of the mask border, where render and candidate are mixed. Seam visibility in
+that band is measured by the Phase-6 fault-injection harness; Poisson blending is reconsidered only
+if seams are visible there.
 
 ## ADR-S08: Async API: jobs + SSE + polling; custom chunked upload protocol
 **Context.** The RunPod proxy cuts requests at 100 s. Uploads can be GBs. Browser EventSource cannot

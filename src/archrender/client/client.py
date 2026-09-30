@@ -64,15 +64,23 @@ class ArchRenderClient:
     def _post(self, url: str, **kw: Any) -> Any:
         return self._check(self._retry(lambda: self.http.post(url, **kw)))
 
-    @staticmethod
-    def _retry(fn: Callable[[], httpx.Response], attempts: int = 4) -> httpx.Response:
+    def _unreachable(self, e: httpx.TransportError) -> ArchRenderClientError:
+        return ArchRenderClientError(
+            0,
+            "UNREACHABLE",
+            f"Cannot reach {self.http.base_url}: {e}",
+            "Check the URL and that the server is up (GET /healthz). A RunPod pod can take several "
+            "minutes after start (model download, self-test) before /readyz reports ready.",
+        )
+
+    def _retry(self, fn: Callable[[], httpx.Response], attempts: int = 4) -> httpx.Response:
         delay = 1.0
         for i in range(attempts):
             try:
                 r = fn()
-            except httpx.TransportError:
+            except httpx.TransportError as e:
                 if i == attempts - 1:
-                    raise
+                    raise self._unreachable(e) from e
             else:
                 if r.status_code not in (502, 503, 504, 524) or i == attempts - 1:
                     return r
@@ -198,10 +206,10 @@ class ArchRenderClient:
                             yield event
                             event = {}
                 # stream closed by the server (max duration): reconnect
-            except httpx.TransportError:
+            except httpx.TransportError as e:
                 failures += 1
                 if failures > 5:
-                    raise
+                    raise self._unreachable(e) from e
                 time.sleep(min(30.0, 2.0**failures))
 
     def wait(
@@ -227,18 +235,23 @@ class ArchRenderClient:
         part = dest.with_suffix(dest.suffix + ".part")
         have = part.stat().st_size if part.exists() else 0
         headers = {"Range": f"bytes={have}-"} if have else {}
-        with self.http.stream(
-            "GET",
-            f"/api/v1/bundles/{bundle_id}/download",
-            headers=headers,
-            timeout=httpx.Timeout(10.0, read=120.0),
-        ) as r:
-            if r.status_code >= 400:
-                r.read()
-                self._check(r)
-            mode = "ab" if r.status_code == 206 else "wb"
-            with part.open(mode) as fh:
-                for buf in r.iter_bytes():
-                    fh.write(buf)
+        try:
+            with self.http.stream(
+                "GET",
+                f"/api/v1/bundles/{bundle_id}/download",
+                headers=headers,
+                timeout=httpx.Timeout(10.0, read=120.0),
+            ) as r:
+                if r.status_code >= 400:
+                    r.read()
+                    self._check(r)
+                mode = "ab" if r.status_code == 206 else "wb"
+                with part.open(mode) as fh:
+                    for buf in r.iter_bytes():
+                        fh.write(buf)
+        except httpx.TransportError as e:
+            err = self._unreachable(e)
+            err.fix_hint = f"Run the same download again to resume from {part} (HTTP Range)."
+            raise ArchRenderClientError(err.status, err.code, err.message, err.fix_hint) from e
         part.replace(dest)
         return dest

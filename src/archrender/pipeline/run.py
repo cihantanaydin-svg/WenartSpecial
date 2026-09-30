@@ -14,6 +14,11 @@ from typing import Any, Literal
 
 from pydantic import Field
 
+from archrender.brief.overrides import (
+    apply_material_overrides,
+    check_elements_exist,
+    validate_material_overrides,
+)
 from archrender.core.config import REPO_ROOT
 from archrender.core.errors import ArchRenderError, ErrorCode, not_found
 from archrender.core.hashing import sha256_json
@@ -53,6 +58,8 @@ class RunConfig(Strict):
     gate_policy: GatePolicy = "on_low_confidence"
     seed: int = Field(default=0, ge=0)
     blend_file: bool = False
+    # Gate B edit: surface → library material id (see archrender.brief.overrides)
+    materials: dict[str, str] = Field(default_factory=dict)
 
 
 def create_run(svc: Services, project_id: str, config: RunConfig, user_id: str) -> tuple[str, str]:
@@ -64,6 +71,7 @@ def create_run(svc: Services, project_id: str, config: RunConfig, user_id: str) 
             f"{prof.max_width}×{prof.max_height}.",
             "Lower the resolution or deploy a larger GPU profile.",
         )
+    validate_material_overrides(config.materials, svc.library)
     run_id = new_id("run")
     job_id = new_id("job")
     with svc.db.tx(immediate=True) as c:
@@ -154,12 +162,19 @@ class RunOrchestrator:
         )
 
         section = resolve_section(plan, cfg.room_ids)
+        check_elements_exist(cfg.materials, plan)
         ctx.progress(0.08, "S4 brief")
         brief_out = eng.run(st["brief"], BriefIn(plan_version=plan.version, section=section), ctx)
+        brief, brief_assumptions = apply_material_overrides(
+            brief_out.brief, brief_out.assumptions, cfg.materials
+        )
         gates.check(
             GateName.B,
-            auto_ok=not brief_out.brief.contradictions,
-            evidence={"assumptions": [a.model_dump(mode="json") for a in brief_out.assumptions]},
+            auto_ok=not brief.contradictions,
+            evidence={
+                "assumptions": [a.model_dump(mode="json") for a in brief_assumptions],
+                "material_overrides": cfg.materials,
+            },
         )
 
         render = RenderSettings(
@@ -175,7 +190,7 @@ class RunOrchestrator:
             SceneIn(
                 plan_json=plan_out.plan_json,
                 section=section,
-                brief=brief_out.brief,
+                brief=brief,
                 render=render,
                 blend=cfg.blend_file,
             ),
@@ -203,10 +218,9 @@ class RunOrchestrator:
         )
 
         materials = {
-            s.surface: svc.library.get(s.material_id).id.replace("_", " ")
-            for s in brief_out.brief.surfaces
+            s.surface: svc.library.get(s.material_id).id.replace("_", " ") for s in brief.surfaces
         }
-        prompt, template_hash = compile_prompt(brief_out.brief, materials)
+        prompt, template_hash = compile_prompt(brief, materials)
         views: list[BundleView] = []
         seeds: dict[str, int] = {}
         render_info: dict[str, Any] = {}
@@ -274,7 +288,7 @@ class RunOrchestrator:
 
         ctx.progress(0.95, "S10 bundle")
         assumptions: list[Assumption] = [
-            *brief_out.assumptions,
+            *brief_assumptions,
             *scene_out.assumptions,
             *cams_out.assumptions,
         ]

@@ -290,3 +290,18 @@ def test_dry_run_prints_masked_payloads(cfg: Any, capsys: pytest.CaptureFixture[
     out = capsys.readouterr().out
     assert "ghp_secret" not in out and "hf_secret" not in out and cfg.admin_token not in out
     assert "runpodctl pod create" in out and "Manual console checklist" in out
+
+
+def test_down_dry_run_describes_teardown_without_api_calls(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Any
+) -> None:
+    env = tmp_path / ".env"
+    env.write_text("ARCHRENDER_IMAGE=registry.example.com/archrender:1\n")
+    monkeypatch.setattr(deploy, "RunPodAPI", None)  # any API use would raise
+    assert deploy.main(["down", "--dry-run", "--purge-volume", "--env-file", str(env)]) == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["pod"]["action"] == "terminate" and plan["pod"]["call"] == "DELETE /pods/<pod-id>"
+    assert plan["network_volume"]["call"] == "DELETE /network-volumes/<volume-id>"
+    assert deploy.main(["down", "--dry-run", "--stop", "--env-file", str(env)]) == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["pod"]["action"] == "stop" and plan["network_volume"]["action"].startswith("keep")

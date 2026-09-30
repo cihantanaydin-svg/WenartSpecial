@@ -66,7 +66,7 @@ function ViewCard({ projectId, v }: { projectId: string; v: ViewResult }) {
   const label = { refined: "QA passed", hard_composite: "hard composite", fallback_base: "Cycles fallback" }[v.status] ?? v.status;
   const cls = v.status === "refined" ? "ok" : "warn";
   return (
-    <figure className="card view" data-testid={`view-${v.view_id}`}>
+    <figure className={`card view${open ? " open" : ""}`} data-testid={`view-${v.view_id}`}>
       <Compare before={blobUrl(projectId, v.base.sha256)} after={blobUrl(projectId, v.delivered_jpg.sha256)} />
       <figcaption>
         <strong>{v.view_id}</strong> <span className={`badge ${cls}`}>{label}</span>

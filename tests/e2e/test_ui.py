@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from archrender.core.config import REPO_ROOT
+from tests.conftest import STRICT
 from tests.e2e.conftest import Live
 from tests.helpers import MINIMAL_DXF
 
@@ -19,6 +20,8 @@ CHROMIUM = os.environ.get("ARCHRENDER_CHROMIUM", "/opt/pw-browsers/chromium")
 @pytest.fixture
 def page():  # type: ignore[no-untyped-def]
     if not (REPO_ROOT / "ui" / "dist" / "index.html").exists():
+        if STRICT:
+            pytest.fail("ARCHRENDER_TEST_STRICT=1 but the UI is not built (run `make ui`)")
         pytest.skip("UI not built (run `make ui`)")
     sync_api = pytest.importorskip("playwright.sync_api")
     with sync_api.sync_playwright() as p:

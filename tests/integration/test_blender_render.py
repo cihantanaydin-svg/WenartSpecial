@@ -94,3 +94,41 @@ def test_render_info_reports_device(rendered: tuple[Path, object]) -> None:
     assert info["blender"].startswith("5.2")
     assert info["device"]["device"] == "CPU"
     assert (out / "beauty.png").stat().st_size > 1000
+
+
+def test_deterministic_qa_flags_shift_and_removed_window_on_real_render(
+    rendered: tuple[Path, object], settings: Settings
+) -> None:
+    """Geometry faults on the Cycles render are caught by the deterministic checks (edge F-score
+    against the line art, verticals); the unmodified render passes (no false alarm)."""
+    from archrender.pipeline.services import Services
+    from archrender.qa.images import decode
+    from archrender.qa.runner import QAContext
+    from archrender.render.passes import category_mask
+
+    out, spec = rendered
+    passes = read_passes(out / "passes.exr")
+    svc = Services.create(settings)
+    qa = QAContext(
+        passes=passes,
+        spec=spec,  # type: ignore[arg-type]
+        qa_width=W,
+        config=svc.qa_config,
+        depth=svc.models.get("depth"),
+        segmenter=svc.models.get("segmenter"),
+    )
+    base = decode((out / "beauty.png").read_bytes())
+    base_m = qa.measure_base(base)
+
+    def failed(img: np.ndarray) -> set[str]:
+        return {c.name for c in qa.evaluate(img, base_m) if not c.passed and not c.mock}
+
+    assert failed(base) == set()
+    assert "structural_edge_f" in failed(np.roll(base, 4, axis=1))  # 2.5% horizontal shift
+
+    opening = category_mask(passes, spec, {"glass", "opening_frame"})  # type: ignore[arg-type]
+    walls = category_mask(passes, spec, {"wall"})  # type: ignore[arg-type]
+    assert opening.sum() > 50, "the test camera must see a window"
+    no_window = base.copy()
+    no_window[opening] = np.median(base[walls], axis=0)  # window painted over with wall colour
+    assert "structural_edge_f" in failed(no_window)

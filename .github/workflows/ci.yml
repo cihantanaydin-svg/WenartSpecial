@@ -1,0 +1,128 @@
+# CI: static checks, the full CPU test suite with the real Blender 5.2.2 runtime, UI + Playwright
+# end-to-end, licence audit, deploy manifest/dry-run, and a container build + smoke test.
+# GPU-only paths are UNVERIFIED-ON-GPU here (no GPU runners); see docs/PROGRESS.md.
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+    tags-ignore: ["**"]
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.8.17"
+  NODE_VERSION: "22"
+  ARCHRENDER_TEST_STRICT: "1"
+  FORCE_COLOR: "1"
+
+jobs:
+  checks:
+    name: lint, types, no-stubs, manifests, deploy dry-run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: ruff
+        run: make lint
+      - name: mypy
+        run: make typecheck
+      - name: no stubs / TODO markers
+        run: uv run python scripts/check_no_stubs.py
+      - name: deploy manifest is fresh
+        run: uv run python -m archrender.ops.deploy_manifest --check
+      - name: JSON Schemas are fresh
+        run: uv run python scripts/export_schemas.py --check
+      - name: deploy.py dry run (no API calls; secrets masked)
+        run: |
+          make -s deploy-dry-run > dry-run.txt
+          python3 -c "import json; d, _ = json.JSONDecoder().raw_decode(open('dry-run.txt').read()); assert {'volume', 'secrets', 'registry', 'template', 'pod'} <= d.keys(), d.keys()"
+          if grep -q placeholder dry-run.txt; then echo "::error::secret value leaked into dry-run output"; exit 1; fi
+
+  test:
+    name: tests (CPU, real Blender)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            deploy/blender/requirements.lock
+      - run: uv sync --frozen
+      - name: Blender runtime (official bpy wheel, hash-locked)
+        run: make setup-blender
+      - name: pytest
+        run: uv run pytest -m "not e2e" -ra
+      - name: eval (CPU subset)
+        run: make eval
+      - name: licence audit
+        run: |
+          make license-audit
+          git diff --exit-code -- THIRD_PARTY_LICENSES.md || { echo "::error::THIRD_PARTY_LICENSES.md is stale; run make license-audit"; exit 1; }
+
+  e2e:
+    name: end-to-end (API, CLI, UI via Playwright)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: make setup-blender
+      - name: build UI (tsc + vite)
+        run: make ui
+      - name: Playwright Chromium
+        run: uv run playwright install --with-deps chromium
+      - name: pytest -m e2e
+        env:
+          ARCHRENDER_E2E_SCREENSHOTS: test-results
+        run: |
+          mkdir -p test-results
+          uv run pytest -m e2e -ra
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-screenshots
+          path: test-results/
+          if-no-files-found: ignore
+
+  container:
+    name: container build (CPU variant) + smoke test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: build archrender:local (bpy wheel, no CUDA base)
+        run: make docker-build-local
+      - name: boot + smoke test
+        run: scripts/container_smoke.sh archrender:local

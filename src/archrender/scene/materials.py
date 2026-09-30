@@ -52,5 +52,7 @@ class MaterialLibrary:
                 "Pick a library material at Gate B or import the material into the asset library.",
             ) from None
 
-    def ids(self) -> list[str]:
-        return sorted(self._by_id)
+    def ids(self, category: str | None = None) -> list[str]:
+        return sorted(
+            k for k, m in self._by_id.items() if category is None or m.category == category
+        )

@@ -10,6 +10,9 @@ import pytest
 from archrender.core.config import REPO_ROOT, Settings
 from archrender.db.database import Database
 
+# CI sets this so missing runtimes (Blender, built UI) fail the run instead of skipping tests.
+STRICT = os.environ.get("ARCHRENDER_TEST_STRICT") == "1"
+
 
 def blender_available(settings: Settings) -> bool:
     if settings.blender_mode == "module":
@@ -66,6 +69,10 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         else "binary"
     )
     if not blender_available(s):
+        if STRICT:
+            raise pytest.UsageError(
+                "ARCHRENDER_TEST_STRICT=1 but no Blender runtime was found (run `make setup-blender`)."
+            )
         skip = pytest.mark.skip(reason="no Blender runtime (run `make setup-blender`)")
         for item in items:
             if "blender" in item.keywords:

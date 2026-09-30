@@ -80,6 +80,7 @@ COPY src/ src/
 COPY configs/ configs/
 COPY deploy/ deploy/
 COPY scripts/ scripts/
+COPY ui/package-lock.json ui/package-lock.json
 RUN --mount=type=secret,id=extra_ca,required=false with-ca sh -c 'set -eux; extras=""; \
     if [ -n "$APP_EXTRAS" ]; then extras="--extra $APP_EXTRAS"; fi; \
     uv sync --frozen --no-dev --no-editable --python ${PYTHON_VERSION} $extras; \

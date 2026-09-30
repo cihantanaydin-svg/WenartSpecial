@@ -776,6 +776,25 @@ def cmd_status(cfg: Config, api: RunPodAPI) -> int:
     return 0
 
 
+def down_plan(cfg: Config, *, stop: bool, purge_volume: bool) -> dict[str, Any]:
+    """What `down` would do, without calling the API (ids are resolved by name at run time)."""
+    pod: dict[str, Any] = {"name": cfg.pod_name}
+    if stop:
+        pod |= {"action": "stop", "call": 'POST /pods/<pod-id>/action {"action": "stop"}'}
+    else:
+        pod |= {"action": "terminate", "call": "DELETE /pods/<pod-id>"}
+    volume: dict[str, Any] = {"name": cfg.volume_name}
+    if purge_volume:
+        volume |= {
+            "action": "delete (ALL projects and models)",
+            "call": "DELETE /network-volumes/<volume-id>",
+            "confirmation": "type the volume name, or pass --yes",
+        }
+    else:
+        volume |= {"action": "keep (the next `up` reuses it)"}
+    return {"command": "down", "pod": pod, "network_volume": volume}
+
+
 def cmd_down(cfg: Config, api: RunPodAPI, *, stop: bool, purge_volume: bool, yes: bool) -> int:
     pod = find_pod(api, cfg)
     if pod is not None:
@@ -824,6 +843,10 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     try:
         cfg = Config.load(Path(args.env_file), dry_run=args.dry_run or args.command == "plan")
+        if args.command == "down" and args.dry_run:
+            plan = down_plan(cfg, stop=args.stop, purge_volume=args.purge_volume)
+            print(json.dumps(plan, indent=2, ensure_ascii=False))
+            return 0
         if args.dry_run or args.command == "plan":
             return cmd_plan(cfg)
         api = RunPodAPI(cfg.api_key)

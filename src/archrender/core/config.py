@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     job_lease_s: float = 120.0
     worker_poll_s: float = 0.5
 
+    def app_root(self) -> Path:
+        """Checkout root in development, /opt/archrender in the image (parent of configs/)."""
+        return self.configs_dir.parent
+
     def projects_dir(self) -> Path:
         return self.data_dir / "projects"
 

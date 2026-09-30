@@ -1,0 +1,284 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archrender.local/schemas/ViewOutcome.schema.json",
+  "$defs": {
+    "CandidateQA": {
+      "additionalProperties": false,
+      "properties": {
+        "view_id": {
+          "title": "View Id",
+          "type": "string"
+        },
+        "candidate_id": {
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "attempt": {
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "seed": {
+          "title": "Seed",
+          "type": "integer"
+        },
+        "params": {
+          "additionalProperties": true,
+          "title": "Params",
+          "type": "object"
+        },
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/CheckResult"
+          },
+          "title": "Checks",
+          "type": "array"
+        },
+        "image_sha256": {
+          "title": "Image Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "view_id",
+        "candidate_id",
+        "attempt",
+        "seed",
+        "checks",
+        "image_sha256"
+      ],
+      "title": "CandidateQA",
+      "type": "object"
+    },
+    "CheckResult": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "family": {
+          "enum": [
+            "geometry",
+            "brief",
+            "artifact",
+            "technical",
+            "cross_view"
+          ],
+          "title": "Family",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        },
+        "base_value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Value"
+        },
+        "delta": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Delta"
+        },
+        "threshold": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threshold"
+        },
+        "comparator": {
+          "default": "<=",
+          "enum": [
+            "<=",
+            ">=",
+            "==",
+            "bool"
+          ],
+          "title": "Comparator",
+          "type": "string"
+        },
+        "estimator": {
+          "title": "Estimator",
+          "type": "string"
+        },
+        "estimator_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "mock": {
+          "default": false,
+          "title": "Mock",
+          "type": "boolean"
+        },
+        "critical": {
+          "default": false,
+          "title": "Critical",
+          "type": "boolean"
+        },
+        "evidence": {
+          "additionalProperties": true,
+          "title": "Evidence",
+          "type": "object"
+        }
+      },
+      "required": [
+        "name",
+        "family",
+        "passed",
+        "estimator"
+      ],
+      "title": "CheckResult",
+      "type": "object"
+    },
+    "ModelRef": {
+      "additionalProperties": false,
+      "description": "Exact identity of a model used to produce a fact or an image.",
+      "properties": {
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "repo": {
+          "title": "Repo",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "weights_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Weights Sha256"
+        },
+        "mock": {
+          "default": false,
+          "title": "Mock",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "role",
+        "name",
+        "repo"
+      ],
+      "title": "ModelRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "view_id": {
+      "title": "View Id",
+      "type": "string"
+    },
+    "camera_id": {
+      "title": "Camera Id",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "refined",
+        "fallback_base",
+        "hard_composite",
+        "needs_review"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "delivered_sha256": {
+      "title": "Delivered Sha256",
+      "type": "string"
+    },
+    "base_sha256": {
+      "title": "Base Sha256",
+      "type": "string"
+    },
+    "attempts": {
+      "items": {
+        "$ref": "#/$defs/CandidateQA"
+      },
+      "title": "Attempts",
+      "type": "array"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "uses_mocks": {
+      "title": "Uses Mocks",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "view_id",
+    "camera_id",
+    "status",
+    "delivered_sha256",
+    "base_sha256",
+    "attempts",
+    "reason",
+    "uses_mocks"
+  ],
+  "title": "ViewOutcome",
+  "type": "object"
+}

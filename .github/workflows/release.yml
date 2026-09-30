@@ -1,0 +1,133 @@
+# Release: on a version tag, run CI, verify pinned third-party checksums against their official
+# sources, build the GPU image (CUDA 13.0 base, Blender 5.2.2 tarball, torch cu130), smoke-test it
+# on a CPU runner (Blender "binary" mode, cpu_test profile), audit the licences of the shipped
+# environment, then push the version tag and publish the digest in the GitHub release.
+# The package inherits the repository's visibility (private repo → private image).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:  # re-run for an existing tag: choose the tag under "Use workflow from"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  UV_VERSION: "0.8.17"
+  TAG: ${{ github.ref_name }}
+
+jobs:
+  ci:
+    if: startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/ci.yml
+
+  verify-pins:
+    name: verify pinned checksums against official sources
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Blender tarball sha256 (download.blender.org)
+        run: |
+          set -euo pipefail
+          arg() { sed -n "s/^ARG $1=//p" deploy/Dockerfile | head -n1; }
+          version=$(arg BLENDER_VERSION); pinned=$(arg BLENDER_SHA256)
+          series=${version%.*}
+          url="https://download.blender.org/release/Blender${series}/blender-${version}.sha256"
+          official=$(curl -fsSL "$url" | awk -v f="blender-${version}-linux-x64.tar.xz" '$2 == f {print $1}')
+          if [[ -z "$official" ]]; then echo "::error::no linux-x64 entry in $url"; exit 1; fi
+          if [[ "$official" != "$pinned" ]]; then
+            echo "::error::Blender ${version}: pinned ${pinned} != official ${official} ($url)"; exit 1
+          fi
+          echo "Blender ${version} linux-x64 sha256 matches the official ${url}"
+
+  image:
+    name: build, smoke-test, audit and publish the GPU image
+    needs: [ci, verify-pins]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: write  # GitHub release
+      packages: write  # GHCR push
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: free runner disk (the CUDA + torch image needs ~25 GB during the build)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          docker system prune -af >/dev/null
+          df -h /
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv sync --frozen --no-dev
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: image name
+        id: name
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/archrender" >> "$GITHUB_OUTPUT"
+      - name: build and push candidate
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: true
+          tags: ${{ steps.name.outputs.image }}:candidate-${{ github.sha }}
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+      - name: smoke test the candidate (CPU runner, Blender binary mode)
+        run: |
+          ref="${{ steps.name.outputs.image }}@${{ steps.build.outputs.digest }}"
+          docker pull -q "$ref"
+          docker run --rm --entrypoint cat "$ref" /etc/archrender-blender-mode | grep -qx binary
+          scripts/container_smoke.sh "$ref"
+      - name: licence audit of the shipped environment
+        run: |
+          ref="${{ steps.name.outputs.image }}@${{ steps.build.outputs.digest }}"
+          mkdir -p out
+          docker run --rm --entrypoint /opt/venv/bin/python -v "$PWD/out:/out" "$ref" \
+            -m archrender.ops.license_audit --prod-only --out /out/THIRD_PARTY_LICENSES.md
+      - name: tag the verified digest
+        run: |
+          image="${{ steps.name.outputs.image }}"
+          docker buildx imagetools create -t "${image}:${TAG#v}" "${image}@${{ steps.build.outputs.digest }}"
+      - name: image lock + release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          image="${{ steps.name.outputs.image }}"; digest="${{ steps.build.outputs.digest }}"
+          jq -n --arg image "$image" --arg digest "$digest" --arg version "${TAG#v}" \
+                --arg commit "$GITHUB_SHA" --arg built "$(date -u +%FT%TZ)" \
+                --arg blender "$(sed -n 's/^ARG BLENDER_VERSION=//p' deploy/Dockerfile | head -n1)" \
+                '{image: $image, digest: $digest, version: $version, git_commit: $commit,
+                  blender: $blender, built_at: $built, reference: ($image + "@" + $digest)}' > out/image.lock.json
+          cat > out/notes.md <<EOF
+          Deploy this exact build (pin the digest in \`deploy/runpod/.env\`):
+
+          \`\`\`
+          ARCHRENDER_IMAGE=${image}@${digest}
+          ARCHRENDER_IMAGE_DIGEST=${digest}
+          \`\`\`
+
+          Smoke-tested on a CPU runner (cpu_test profile). GPU paths are verified on the pod by the
+          entrypoint self-test; see docs/PROGRESS.md for what is UNVERIFIED-ON-GPU.
+          EOF
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" out/image.lock.json out/THIRD_PARTY_LICENSES.md --clobber
+            gh release edit "$TAG" --notes-file out/notes.md
+          else
+            gh release create "$TAG" --title "ArchRender ${TAG}" --notes-file out/notes.md \
+              out/image.lock.json out/THIRD_PARTY_LICENSES.md
+          fi

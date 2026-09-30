@@ -1,0 +1,673 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archrender.local/schemas/SceneSpec.schema.json",
+  "$defs": {
+    "AssetLicense": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "license": {
+          "title": "License",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "generated": {
+          "default": false,
+          "title": "Generated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "license"
+      ],
+      "title": "AssetLicense",
+      "type": "object"
+    },
+    "CameraSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "default": "perspective",
+          "enum": [
+            "perspective",
+            "panorama",
+            "orthographic"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "position": {
+          "$ref": "#/$defs/Vec3"
+        },
+        "yaw_deg": {
+          "title": "Yaw Deg",
+          "type": "number"
+        },
+        "pitch_deg": {
+          "default": 0.0,
+          "title": "Pitch Deg",
+          "type": "number"
+        },
+        "focal_mm": {
+          "default": 24.0,
+          "maximum": 120,
+          "minimum": 10,
+          "title": "Focal Mm",
+          "type": "number"
+        },
+        "sensor_width_mm": {
+          "default": 36.0,
+          "title": "Sensor Width Mm",
+          "type": "number"
+        },
+        "shift_x": {
+          "default": 0.0,
+          "title": "Shift X",
+          "type": "number"
+        },
+        "shift_y": {
+          "default": 0.0,
+          "title": "Shift Y",
+          "type": "number"
+        },
+        "clip_start": {
+          "default": 0.05,
+          "exclusiveMinimum": 0,
+          "title": "Clip Start",
+          "type": "number"
+        },
+        "clip_end": {
+          "default": 200.0,
+          "exclusiveMinimum": 0,
+          "title": "Clip End",
+          "type": "number"
+        },
+        "ortho_scale": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ortho Scale"
+        }
+      },
+      "required": [
+        "id",
+        "position",
+        "yaw_deg"
+      ],
+      "title": "CameraSpec",
+      "type": "object"
+    },
+    "ExportSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "glb": {
+          "default": true,
+          "title": "Glb",
+          "type": "boolean"
+        },
+        "blend": {
+          "default": false,
+          "title": "Blend",
+          "type": "boolean"
+        }
+      },
+      "title": "ExportSettings",
+      "type": "object"
+    },
+    "MaterialSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "base_color_linear": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Base Color Linear",
+          "type": "array"
+        },
+        "roughness": {
+          "default": 0.5,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Roughness",
+          "type": "number"
+        },
+        "metallic": {
+          "default": 0.0,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Metallic",
+          "type": "number"
+        },
+        "transmission": {
+          "default": 0.0,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Transmission",
+          "type": "number"
+        },
+        "ior": {
+          "default": 1.5,
+          "maximum": 3.0,
+          "minimum": 1.0,
+          "title": "Ior",
+          "type": "number"
+        },
+        "alpha": {
+          "default": 1.0,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Alpha",
+          "type": "number"
+        },
+        "texture_size_m": {
+          "default": [
+            1.0,
+            1.0
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Texture Size M",
+          "type": "array"
+        },
+        "base_color_map": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Color Map"
+        },
+        "roughness_map": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Roughness Map"
+        },
+        "normal_map": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normal Map"
+        },
+        "pass_index": {
+          "default": 0,
+          "maximum": 255,
+          "minimum": 0,
+          "title": "Pass Index",
+          "type": "integer"
+        },
+        "source": {
+          "default": "procedural",
+          "title": "Source",
+          "type": "string"
+        },
+        "license": {
+          "default": "proprietary-firm",
+          "title": "License",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "base_color_linear"
+      ],
+      "title": "MaterialSpec",
+      "type": "object"
+    },
+    "MeshFile": {
+      "additionalProperties": false,
+      "description": "Triangle mesh stored as ``.npz`` with ``vertices`` (N,3 f4), ``faces`` (M,3 i4), ``uv`` (N,2 f4).",
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "triangles": {
+          "minimum": 1,
+          "title": "Triangles",
+          "type": "integer"
+        },
+        "watertight": {
+          "title": "Watertight",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "triangles",
+        "watertight"
+      ],
+      "title": "MeshFile",
+      "type": "object"
+    },
+    "RenderSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "engine": {
+          "const": "CYCLES",
+          "default": "CYCLES",
+          "title": "Engine",
+          "type": "string"
+        },
+        "device": {
+          "default": "AUTO",
+          "enum": [
+            "AUTO",
+            "CPU",
+            "GPU"
+          ],
+          "title": "Device",
+          "type": "string"
+        },
+        "gpu_backends": {
+          "items": {
+            "enum": [
+              "OPTIX",
+              "CUDA"
+            ],
+            "type": "string"
+          },
+          "title": "Gpu Backends",
+          "type": "array"
+        },
+        "width": {
+          "maximum": 8192,
+          "minimum": 16,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "maximum": 8192,
+          "minimum": 16,
+          "title": "Height",
+          "type": "integer"
+        },
+        "samples": {
+          "default": 512,
+          "maximum": 8192,
+          "minimum": 1,
+          "title": "Samples",
+          "type": "integer"
+        },
+        "adaptive_threshold": {
+          "default": 0.01,
+          "exclusiveMinimum": 0,
+          "title": "Adaptive Threshold",
+          "type": "number"
+        },
+        "denoise": {
+          "default": true,
+          "title": "Denoise",
+          "type": "boolean"
+        },
+        "view_transform": {
+          "default": "AgX",
+          "enum": [
+            "AgX",
+            "Khronos PBR Neutral",
+            "Standard"
+          ],
+          "title": "View Transform",
+          "type": "string"
+        },
+        "look": {
+          "default": "None",
+          "title": "Look",
+          "type": "string"
+        },
+        "exposure": {
+          "default": 0.0,
+          "title": "Exposure",
+          "type": "number"
+        },
+        "seed": {
+          "default": 0,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "threads": {
+          "default": 0,
+          "title": "Threads",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "width",
+        "height"
+      ],
+      "title": "RenderSettings",
+      "type": "object"
+    },
+    "SceneObject": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "category": {
+          "enum": [
+            "wall",
+            "floor",
+            "ceiling",
+            "skirting",
+            "opening_frame",
+            "glass",
+            "door_leaf",
+            "builtin",
+            "furniture",
+            "decor",
+            "cut_cap",
+            "backplate"
+          ],
+          "title": "Category",
+          "type": "string"
+        },
+        "mesh": {
+          "$ref": "#/$defs/MeshFile"
+        },
+        "material": {
+          "title": "Material",
+          "type": "string"
+        },
+        "pass_index": {
+          "maximum": 255,
+          "minimum": 0,
+          "title": "Pass Index",
+          "type": "integer"
+        },
+        "element_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Element Ref"
+        }
+      },
+      "required": [
+        "id",
+        "category",
+        "mesh",
+        "material",
+        "pass_index"
+      ],
+      "title": "SceneObject",
+      "type": "object"
+    },
+    "SunSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "azimuth_deg": {
+          "title": "Azimuth Deg",
+          "type": "number"
+        },
+        "elevation_deg": {
+          "title": "Elevation Deg",
+          "type": "number"
+        },
+        "strength": {
+          "default": 3.0,
+          "minimum": 0,
+          "title": "Strength",
+          "type": "number"
+        },
+        "angle_deg": {
+          "default": 0.53,
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Angle Deg",
+          "type": "number"
+        },
+        "color_k": {
+          "default": 5500.0,
+          "maximum": 20000,
+          "minimum": 1000,
+          "title": "Color K",
+          "type": "number"
+        }
+      },
+      "required": [
+        "azimuth_deg",
+        "elevation_deg"
+      ],
+      "title": "SunSpec",
+      "type": "object"
+    },
+    "Vec3": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        },
+        "z": {
+          "title": "Z",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "z"
+      ],
+      "title": "Vec3",
+      "type": "object"
+    },
+    "WorldSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "default": "color",
+          "enum": [
+            "color",
+            "sky",
+            "hdri"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "color_linear": {
+          "default": [
+            0.6,
+            0.7,
+            0.9
+          ],
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Color Linear",
+          "type": "array"
+        },
+        "strength": {
+          "default": 1.0,
+          "minimum": 0,
+          "title": "Strength",
+          "type": "number"
+        },
+        "hdri_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hdri Path"
+        }
+      },
+      "title": "WorldSpec",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "scene_id": {
+      "title": "Scene Id",
+      "type": "string"
+    },
+    "north_angle_deg": {
+      "default": 0.0,
+      "title": "North Angle Deg",
+      "type": "number"
+    },
+    "objects": {
+      "items": {
+        "$ref": "#/$defs/SceneObject"
+      },
+      "minItems": 1,
+      "title": "Objects",
+      "type": "array"
+    },
+    "materials": {
+      "items": {
+        "$ref": "#/$defs/MaterialSpec"
+      },
+      "minItems": 1,
+      "title": "Materials",
+      "type": "array"
+    },
+    "sun": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SunSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "world": {
+      "$ref": "#/$defs/WorldSpec"
+    },
+    "cameras": {
+      "items": {
+        "$ref": "#/$defs/CameraSpec"
+      },
+      "title": "Cameras",
+      "type": "array"
+    },
+    "render": {
+      "$ref": "#/$defs/RenderSettings"
+    },
+    "exports": {
+      "$ref": "#/$defs/ExportSettings"
+    },
+    "assets": {
+      "items": {
+        "$ref": "#/$defs/AssetLicense"
+      },
+      "title": "Assets",
+      "type": "array"
+    }
+  },
+  "required": [
+    "scene_id",
+    "objects",
+    "materials",
+    "render"
+  ],
+  "title": "SceneSpec",
+  "type": "object"
+}
