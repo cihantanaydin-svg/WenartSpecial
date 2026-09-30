@@ -3,6 +3,7 @@ description: 'CPU-only tests: every model role mocked, tiny Cycles renders.'
 vram_budget_gb: 0
 min_system_ram_gb: 4
 roles:
+  ocr: tesseract-5
   refiner: mock-refiner
   depth: mock-depth
   segmenter: mock-segmenter

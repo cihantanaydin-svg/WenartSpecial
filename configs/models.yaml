@@ -66,7 +66,7 @@ models:
     runtime: transformers>=5.17
     vram_gb: 3
     disk_gb: 2
-    fallback: rapidocr-ppocr
+    fallback: tesseract-5
     notes: primary incl. Turkish; full-resolution tiles only
   - name: pp-doclayout-v3
     role: layout
@@ -86,15 +86,16 @@ models:
     vram_gb: 3
     disk_gb: 2.5
     notes: English documents only (no Turkish); SDK maas.enabled=false
-  - name: rapidocr-ppocr
+  - name: tesseract-5
     role: ocr
-    repo: RapidAI/RapidOCR
-    license: {id: apache-2.0, class: permissive, evidence_url: https://github.com/RapidAI/RapidOCR, checked_at: 2026-09-30}
+    license: {id: apache-2.0, class: permissive,
+              evidence_url: https://github.com/tesseract-ocr/tesseract/blob/main/LICENSE, checked_at: 2026-09-30}
     commercial_ok: true
-    runtime: onnxruntime
+    runtime: system:tesseract>=5 (apt tesseract-ocr, tesseract-ocr-tur, tesseract-ocr-eng; tessdata Apache-2.0)
+    impl: archrender.models.impls.tesseract:TesseractOcr
     vram_gb: 0
-    disk_gb: 0.2
-    notes: deterministic line boxes; Turkish fallback (PP-OCRv5/v6 Latin)
+    disk_gb: 0
+    notes: CPU baseline and fallback OCR, Turkish LSTM model; replaces RapidOCR (ADR-M03 amendment)
   # ---------------------------------------------------------------- segmentation (ADR-M04)
   - name: sam3
     role: segmenter
@@ -262,6 +263,13 @@ models:
     commercial_ok: true
     runtime: numpy
     impl: archrender.models.mocks.impls:MockDepthEstimator
+    mock: true
+  - name: mock-ocr
+    role: ocr
+    license: {id: proprietary-firm, class: proprietary}
+    commercial_ok: true
+    runtime: numpy
+    impl: archrender.models.mocks.impls:MockOcr
     mock: true
   - name: mock-segmenter
     role: segmenter

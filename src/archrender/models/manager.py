@@ -61,7 +61,9 @@ class ModelManager:
         return sum(self._vram.values())
 
     def get(self, role: str) -> Any:
-        entry = self.entry_for(role)
+        return self._load(self.entry_for(role))
+
+    def _load(self, entry: RegistryEntry) -> Any:
         if entry.name in self._loaded:
             self._loaded.move_to_end(entry.name)
             return self._loaded[entry.name][1]
@@ -80,6 +82,34 @@ class ModelManager:
         self._loaded[entry.name] = (entry, impl)
         self._vram[entry.name] = entry.vram_gb
         return impl
+
+    def get_with_fallback(self, role: str, stage: str) -> tuple[Any, RegistryEntry]:
+        """The profile's model for ``role``, else the first usable entry of its fallback chain.
+
+        A model counts as unusable if it has no runtime in this build or fails to load (e.g. a
+        missing system package). Every step down the chain is recorded as a degradation.
+        """
+        entry = self.entry_for(role)
+        tried: list[str] = []
+        while True:
+            try:
+                impl = self._load(entry)
+                for failed in tried:
+                    self.record_degradation(
+                        stage, f"{role}: {failed} → {entry.name}", "primary unavailable"
+                    )
+                return impl, entry
+            except ArchRenderError as e:
+                if e.code not in (ErrorCode.MODEL_NOT_DOWNLOADED, ErrorCode.MODEL_LICENSE_BLOCKED):
+                    raise
+                tried.append(f"{entry.name} ({e.message})")
+                if entry.fallback is None:
+                    raise ArchRenderError(
+                        ErrorCode.MODEL_NOT_DOWNLOADED,
+                        f"No usable model for role {role!r}: tried {'; '.join(tried)}.",
+                        e.fix_hint,
+                    ) from e
+                entry = self.registry.get(entry.fallback)
 
     def _make_room(self, need_gb: float, keep: str) -> None:
         budget = self.profile.vram_budget_gb

@@ -51,7 +51,9 @@ def e_box(e: dict[str, float]) -> list[float]:
 
 def test_scan_ground_truth_lands_on_ink() -> None:
     page = floor_plan_page(np.random.default_rng(9))
-    data, media, gt = scan(page.pdf, page.gt, np.random.default_rng(1), dpi=200, skew_deg=1.2, quality="clean")
+    data, media, gt = scan(
+        page.pdf, page.gt, np.random.default_rng(1), dpi=200, skew_deg=1.2, quality="clean"
+    )
     from io import BytesIO
 
     from PIL import Image
@@ -89,7 +91,9 @@ def test_layouts_are_connected_and_openings_do_not_overlap(seed: int) -> None:
         x, y = opening_point(lay, o)
         eps = 0.05
         probes = [(x, y - eps), (x, y + eps)] if w.horizontal else [(x - eps, y), (x + eps, y)]
-        found = [r.id for p in probes for r in lay.rooms if r.x0 <= p[0] <= r.x1 and r.y0 <= p[1] <= r.y1]
+        found = [
+            r.id for p in probes for r in lay.rooms if r.x0 <= p[0] <= r.x1 and r.y0 <= p[1] <= r.y1
+        ]
         assert len(set(found)) == 2, (seed, o.tag)
         a, b = sorted(set(found))
         adj[a].add(b)

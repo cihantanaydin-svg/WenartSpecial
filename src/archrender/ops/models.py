@@ -152,6 +152,9 @@ def download(
             report.skipped[name] = f"role {role}: runtime not implemented in this build"
             continue
         gate.check(entry)
+        if entry.runtime.startswith("system:"):
+            report.skipped[name] = "system package (installed in the image, no weights to download)"
+            continue
         if not entry.repo:
             raise ArchRenderError(
                 ErrorCode.VALIDATION, f"{name} has no repo.", "Fix configs/models.yaml."

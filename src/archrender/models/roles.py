@@ -51,3 +51,19 @@ class Instance:
 
 class TextSegmenter(ModelImpl, Protocol):
     def segment(self, img: Img, prompts: list[str]) -> list[Instance]: ...
+
+
+@dataclass
+class OcrWord:
+    """A recognised word; ``box`` is (x0, y0, x1, y1) in the pixels of the image passed in."""
+
+    text: str
+    box: tuple[float, float, float, float]
+    confidence: float  # 0..1
+    angle_deg: float = 0.0
+
+
+class OcrEngine(ModelImpl, Protocol):
+    def read(self, img: NDArray[np.uint8], langs: list[str]) -> list[OcrWord]:
+        """Words in an (H, W, 3) uint8 RGB image (one full-resolution tile)."""
+        ...

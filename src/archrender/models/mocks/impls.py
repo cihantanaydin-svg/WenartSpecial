@@ -13,7 +13,7 @@ from numpy.typing import NDArray
 
 from archrender.core.schemas.common import ModelRef
 from archrender.models.registry import RegistryEntry
-from archrender.models.roles import Img, Instance, RefineRequest
+from archrender.models.roles import Img, Instance, OcrWord, RefineRequest
 from archrender.qa.images import luminance
 
 
@@ -62,4 +62,11 @@ class MockTextSegmenter(_MockBase):
     and are flagged mock."""
 
     def segment(self, img: Img, prompts: list[str]) -> list[Instance]:
+        return []
+
+
+class MockOcr(_MockBase):
+    """Reads nothing. Keeps the S1 plumbing runnable without an OCR engine; flagged mock."""
+
+    def read(self, img: NDArray[np.uint8], langs: list[str]) -> list[OcrWord]:
         return []
