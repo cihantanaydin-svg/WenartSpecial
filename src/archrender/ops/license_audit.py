@@ -50,7 +50,7 @@ TEXT_SPDX = [
     (re.compile(r"^\s*bsd[- ]3[- ]clause\s*$", re.I), "BSD-3-Clause"),
     (re.compile(r"^\s*bsd[- ]2[- ]clause\s*$", re.I), "BSD-2-Clause"),
     (re.compile(r"^\s*(new |modified |3-clause )?bsd( license)?\s*$", re.I), "BSD-3-Clause"),
-    (re.compile(r"^\s*psf(-2\.0)?\s*$", re.I), "PSF-2.0"),
+    (re.compile(r"^\s*psfl?(-2\.0)?\s*$", re.I), "PSF-2.0"),
     (re.compile(r"^\s*isc( license)?\s*$", re.I), "ISC"),
     (re.compile(r"^\s*mpl[- ]2\.0\s*$", re.I), "MPL-2.0"),
 ]

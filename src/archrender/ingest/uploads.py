@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import shutil
 import tempfile
@@ -13,8 +12,9 @@ from typing import Any
 from archrender.core.errors import ArchRenderError, ErrorCode, not_found
 from archrender.core.ids import new_id, now_iso
 from archrender.core.paths import check_id, check_sha256, safe_join, sanitize_filename
+from archrender.core.schemas.document import IntakeResult
 from archrender.core.schemas.jobs import JobKind
-from archrender.ingest.detect import check_supported, detect
+from archrender.ingest.intake import ingest_file
 from archrender.pipeline.services import Services
 
 
@@ -152,9 +152,21 @@ def run_intake(svc: Services, upload_id: str) -> dict[str, Any]:
     row = _upload_row(svc, upload_id)
     project_id = row["project_id"]
     if row["status"] == "complete" and row["document_id"]:
-        return {"document_id": row["document_id"], "deduplicated": True}
+        doc = svc.db.one(
+            "SELECT kind, sha256, (SELECT COUNT(*) FROM pages WHERE document_id = documents.id) AS n"
+            " FROM documents WHERE id = ?",
+            (row["document_id"],),
+        )
+        if doc is None:
+            raise not_found("Document", row["document_id"])
+        return IntakeResult(
+            document_id=row["document_id"],
+            kind=doc["kind"],
+            sha256=doc["sha256"],
+            deduplicated=True,
+            pages=int(doc["n"]),
+        ).model_dump(mode="json")
     d = upload_dir(svc, project_id, upload_id)
-    store = svc.store(project_id)
     assembled = d / "assembled.bin"
     h = hashlib.sha256()
     with assembled.open("wb") as out:
@@ -169,41 +181,16 @@ def run_intake(svc: Services, upload_id: str) -> dict[str, Any]:
             "Assembled file does not match the declared SHA-256.",
             "Restart the upload; the file changed or chunks were mixed up.",
         )
-    detected = detect(assembled)
-    check_supported(detected, row["filename"])
-    ref = store.put_file(assembled, detected.media_type, row["filename"], move=True)
-    existing = svc.db.one(
-        "SELECT id FROM documents WHERE project_id = ? AND sha256 = ?", (project_id, ref.sha256)
-    )
-    if existing is not None:
-        doc_id, dedup = existing["id"], True
-    else:
-        doc_id, dedup = new_id("doc"), False
-        with svc.db.tx(immediate=True) as c:
-            c.execute(
-                "INSERT INTO documents(id, project_id, sha256, filename, kind, media_type, size, meta_json, created_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?)",
-                (
-                    doc_id,
-                    project_id,
-                    ref.sha256,
-                    row["filename"],
-                    detected.kind,
-                    detected.media_type,
-                    ref.size,
-                    json.dumps({"upload_id": upload_id}),
-                    now_iso(),
-                ),
-            )
+    try:
+        result = ingest_file(
+            svc, project_id, assembled, row["filename"], meta={"upload_id": upload_id}
+        )
+    finally:
+        assembled.unlink(missing_ok=True)
     with svc.db.tx(immediate=True) as c:
         c.execute(
             "UPDATE uploads SET status = 'complete', document_id = ? WHERE id = ?",
-            (doc_id, upload_id),
+            (result.document_id, upload_id),
         )
     shutil.rmtree(d, ignore_errors=True)
-    return {
-        "document_id": doc_id,
-        "kind": detected.kind,
-        "sha256": ref.sha256,
-        "deduplicated": dedup,
-    }
+    return result.model_dump(mode="json")

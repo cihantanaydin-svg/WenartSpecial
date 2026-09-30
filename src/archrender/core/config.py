@@ -49,6 +49,26 @@ class Settings(BaseSettings):
     max_upload_bytes: int = 4 * 1024 * 1024 * 1024
     max_project_bytes: int = 50 * 1024 * 1024 * 1024
 
+    # intake limits (S0). Untrusted parsers run in a separate process under these limits.
+    zip_max_total_bytes: int = 20 * 1024**3
+    zip_max_ratio: float = 100.0  # uncompressed / compressed, per entry and overall
+    zip_max_entries: int = 10_000
+    zip_max_depth: int = 3
+    image_max_pixels: int = 300_000_000
+    pdf_max_pages: int = 500
+    pdf_dpi: float = 300.0
+    pdf_max_page_pixels: int = 160_000_000  # A0 at 300 DPI is 139 MP; larger sheets get lower DPI
+    tile_px: int = 1536
+    tile_overlap: float = 0.2
+    sandbox_memory_mb: int = 6144
+    sandbox_cpu_s: int = 900
+    sandbox_timeout_s: float = 1200.0
+    office_max_cells: int = 1_000_000
+    dwg2dxf_bin: str = "dwg2dxf"  # LibreDWG (GPL, separate process; ADR-S16)
+    heif_bin: str = (
+        ""  # empty → heif-dec, then heif-convert (libheif, decoder plugin only; ADR-S17)
+    )
+
     # workers
     cpu_workers: int = 2
     job_lease_s: float = 120.0

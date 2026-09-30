@@ -22,6 +22,13 @@ dependencies = [
     "jinja2>=3.1,<4",
     "puremagic>=2.2,<3",
     "scipy>=1.18,<2",
+    "pypdfium2>=5.13",
+    "ezdxf>=1.4.4",
+    "python-docx>=1.2",
+    "openpyxl>=3.1.5",
+    "python-pptx>=1.0.2",
+    "reportlab>=5.0",
+    "defusedxml>=0.7.1",
 ]
 
 [project.optional-dependencies]
@@ -51,6 +58,7 @@ dev = [
     "jsonschema>=4.26",
     "requests>=2.32",
     "types-requests>=2.32",
+    "types-openpyxl>=3.1.5.20260827",
 ]
 
 [build-system]

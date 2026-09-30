@@ -32,16 +32,22 @@ def _zip_kind(path: Path) -> Detected:
         ) from e
     if "[Content_Types].xml" in names:
         if any(n.startswith("word/") for n in names):
+            if "word/vbaProject.bin" in names:
+                return Detected("docm", "application/vnd.ms-word.document.macroEnabled.12")
             return Detected(
                 "docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
         if any(n.startswith("xl/") for n in names):
             if "xl/vbaProject.bin" in names:
-                return Detected("xlsx_macro", "application/vnd.ms-excel.sheet.macroEnabled.12")
+                return Detected("xlsm", "application/vnd.ms-excel.sheet.macroEnabled.12")
             return Detected(
                 "xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         if any(n.startswith("ppt/") for n in names):
+            if "ppt/vbaProject.bin" in names:
+                return Detected(
+                    "pptm", "application/vnd.ms-powerpoint.presentation.macroEnabled.12"
+                )
             return Detected(
                 "pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"
             )
@@ -136,6 +142,7 @@ SUPPORTED = {
     "zip",
     "docx",
     "xlsx",
+    "xlsm",  # read as data only; the VBA project is ignored, never executed
     "pptx",
     "txt",
     "md",
@@ -155,11 +162,12 @@ def check_supported(d: Detected, filename: str) -> None:
             f"{filename} is a native SketchUp model (SKP).",
             "Export IFC, DWG or PDF from SketchUp and upload that instead.",
         )
-    if d.kind == "xlsx_macro":
+    if d.kind in ("docm", "pptm"):
+        plain = "docx" if d.kind == "docm" else "pptx"
         raise ArchRenderError(
             ErrorCode.INGEST_UNSUPPORTED_TYPE,
-            f"{filename} is a macro-enabled workbook.",
-            "Save it as a plain .xlsx (macros are never executed or accepted).",
+            f"{filename} is a macro-enabled Office file ({d.kind}).",
+            f"Save it as a plain .{plain}; macros are never executed or accepted.",
         )
     if d.kind not in SUPPORTED:
         raise ArchRenderError(

@@ -23,10 +23,12 @@ packages:
     openexr: {license: BSD-3-Clause, evidence: "https://github.com/AcademySoftwareFoundation/openexr/blob/main/LICENSE.md", checked_at: 2026-09-30}
     manifold3d: {license: Apache-2.0, evidence: "https://github.com/elalish/manifold/blob/master/LICENSE", checked_at: 2026-09-30}
     scikit-image: {license: BSD-3-Clause, evidence: "https://github.com/scikit-image/scikit-image/blob/main/LICENSE.txt", checked_at: 2026-09-30}
+    pypdfium2: {license: Apache-2.0 AND BSD-3-Clause, evidence: "https://github.com/pypdfium2-team/pypdfium2#licensing", note: "PyPI metadata: BSD-3-Clause, Apache-2.0, dependency licenses (PDFium BSD-3-Clause + permissive notices); both obligations kept", checked_at: 2026-09-30}
   # Tools run only as separate processes (arm's length); GPL permitted there.
   subprocess_tools:
     blender: GPL-3.0-or-later
     libredwg: GPL-3.0-or-later
     libheif: LGPL-3.0-or-later
+    tesseract: Apache-2.0
     litestream: Apache-2.0
     supervisor: BSD-derived

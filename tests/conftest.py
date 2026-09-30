@@ -14,6 +14,18 @@ from archrender.db.database import Database
 STRICT = os.environ.get("ARCHRENDER_TEST_STRICT") == "1"
 
 
+def require_tool(*candidates: str) -> str:
+    """Path of the first available external tool; skips the test (fails under strict mode)."""
+    for c in candidates:
+        found = shutil.which(c)
+        if found:
+            return found
+    msg = f"external tool not installed: {' or '.join(candidates)}"
+    if STRICT:
+        pytest.fail(f"ARCHRENDER_TEST_STRICT=1 but {msg}")
+    pytest.skip(msg)
+
+
 def blender_available(settings: Settings) -> bool:
     if settings.blender_mode == "module":
         return settings.blender_python.exists()

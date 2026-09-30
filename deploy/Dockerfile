@@ -5,6 +5,7 @@
 #                        --build-arg APP_EXTRAS= --build-arg BASE_IMAGE=ubuntu:24.04@sha256:… .
 ARG BASE_IMAGE=nvidia/cuda:13.0.3-runtime-ubuntu24.04@sha256:76f46f3e649824ebd3685d3d86c42b0ea62af04f59242f419f56cd5804a72efb
 ARG NODE_IMAGE=node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c
+ARG BUILDER_IMAGE=ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
 
 # ---------------------------------------------------------------------------------- UI build
 FROM ${NODE_IMAGE} AS ui
@@ -14,6 +15,15 @@ COPY ui/package.json ui/package-lock.json ./
 RUN --mount=type=secret,id=extra_ca,required=false with-ca npm ci --no-audit --no-fund
 COPY ui/ ./
 RUN npm run build
+
+# ---------------------------------------------------------------------------------- LibreDWG
+# GPL-3.0-or-later, used only as the separate dwg2dxf process (ADR-S16); not in Ubuntu 24.04 apt.
+FROM ${BUILDER_IMAGE} AS libredwg
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential ca-certificates curl pkg-config xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+COPY deploy/with-ca.sh /usr/local/bin/with-ca
+COPY deploy/libredwg/build.sh /usr/local/bin/build-libredwg
+RUN --mount=type=secret,id=extra_ca,required=false with-ca build-libredwg /opt/libredwg
 
 # ---------------------------------------------------------------------------------- runtime
 FROM ${BASE_IMAGE} AS runtime
@@ -42,6 +52,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libx11-6 libxi6 libxxf86vm1 libxfixes3 libxrender1 libxext6 libxkbcommon0 libsm6 libice6 \
         libgl1 libegl1 libglvnd0 libfontconfig1 libgomp1 \
         libheif-examples libheif-plugin-libde265 \
+        tesseract-ocr tesseract-ocr-tur tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 COPY deploy/with-ca.sh /usr/local/bin/with-ca
 
@@ -98,7 +109,9 @@ RUN --mount=type=secret,id=hf_token,required=false set -eux; if [ -n "$BAKE_MODE
       HF_TOKEN="$(cat /run/secrets/hf_token 2>/dev/null || true)" ARCHRENDER_DATA_DIR=/opt/baked \
       /opt/venv/bin/python -m archrender.ops.models download --profile "$BAKE_MODELS"; fi
 
-ENV PATH=/opt/venv/bin:$PATH \
+COPY --from=libredwg /opt/libredwg /opt/libredwg
+
+ENV PATH=/opt/venv/bin:/opt/libredwg/bin:$PATH \
     ARCHRENDER_CONFIGS_DIR=/opt/archrender/configs \
     ARCHRENDER_UI_DIST=/opt/archrender/ui/dist \
     ARCHRENDER_DATA_DIR=/workspace \

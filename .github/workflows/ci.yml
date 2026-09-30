@@ -68,6 +68,21 @@ jobs:
       - run: uv sync --frozen
       - name: Blender runtime (official bpy wheel, hash-locked)
         run: make setup-blender
+      - name: intake/OCR tools (libheif decoder, Tesseract with Turkish)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends libheif-examples libheif-plugin-libde265 \
+            tesseract-ocr tesseract-ocr-tur tesseract-ocr-eng
+      - name: LibreDWG cache
+        id: libredwg
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/libredwg
+          key: libredwg-${{ runner.os }}-${{ hashFiles('deploy/libredwg/build.sh') }}
+      - name: LibreDWG (pinned source build, deploy/libredwg/build.sh)
+        if: steps.libredwg.outputs.cache-hit != 'true'
+        run: deploy/libredwg/build.sh "$HOME/libredwg"
+      - run: echo "$HOME/libredwg/bin" >> "$GITHUB_PATH"
       - name: pytest
         run: uv run pytest -m "not e2e" -ra
       - name: eval (CPU subset)

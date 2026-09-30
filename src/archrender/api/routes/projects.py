@@ -137,6 +137,8 @@ def purge_project(
             "jobs",
             "upload_chunks",
             "uploads",
+            "review_items",
+            "pages",
             "documents",
             "project_members",
         ):
