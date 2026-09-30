@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ArchRender QA report · {{ project_name }}</title>
+<style>
+  :root { --fg:#1d1d1f; --muted:#6b6b70; --ok:#1a7f37; --bad:#c62828; --warn:#9a6700; --line:#e5e5e7; }
+  body { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--fg); margin: 24px auto; max-width: 1100px; padding: 0 16px; }
+  h1 { font-size: 22px; margin: 0 0 4px; } h2 { font-size: 17px; margin: 28px 0 8px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+  .muted { color: var(--muted); } table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .ok { color: var(--ok); font-weight: 600; } .bad { color: var(--bad); font-weight: 600; } .warn { color: var(--warn); font-weight: 600; }
+  .banner { background: #fff4e5; border: 1px solid #f0c36d; padding: 10px 12px; border-radius: 6px; margin: 12px 0; }
+  .views { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+  .views figure { margin: 0; } .views img { width: 100%; border: 1px solid var(--line); }
+  code { font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>QA report: {{ project_name }}</h1>
+<div class="muted">Run <code>{{ run_id }}</code> · generated {{ generated_at }} · profile <code>{{ manifest.profile }}</code> · mode <code>{{ mode }}</code></div>
+
+{% if manifest.uses_mocks %}
+<div class="banner"><strong>Mock models were used.</strong> Checks marked <em>mock</em> exercised the pipeline plumbing only. They are not real measurements, and this bundle is not client-ready.</div>
+{% endif %}
+{% if plan_source == "mock" %}
+<div class="banner"><strong>Mock plan.</strong> The geometry comes from the Phase-1 mock extractor, not from the project documents.</div>
+{% endif %}
+
+<h2>Views</h2>
+<div class="views">
+{% for v in views %}
+<figure>
+  <img src="../renders/{{ v.view_id }}.jpg" alt="{{ v.view_id }}">
+  <figcaption><strong>{{ v.view_id }}</strong> ({{ v.camera_id }}):
+    {% if v.status == "refined" %}<span class="ok">refined, QA passed</span>
+    {% elif v.status == "hard_composite" %}<span class="warn">hard structural composite</span>
+    {% elif v.status == "fallback_base" %}<span class="warn">Cycles render (refinement failed QA)</span>
+    {% else %}<span class="bad">{{ v.status }}</span>{% endif %}
+    {% if v.uses_mocks %}<span class="warn"> · mock estimators</span>{% endif %}
+    <br><span class="muted">{{ v.reason }}</span></figcaption>
+</figure>
+{% endfor %}
+</div>
+
+{% for v in views %}
+<h2>{{ v.view_id }}: checks on the delivered image</h2>
+<table>
+<tr><th>Check</th><th>Family</th><th>Result</th><th>Value</th><th>Base</th><th>Δ</th><th>Threshold</th><th>Estimator</th></tr>
+{% for c in delivered_checks[v.view_id] %}
+<tr><td>{{ c.name }}</td><td>{{ c.family }}</td>
+<td>{% if c.passed %}<span class="ok">pass</span>{% else %}<span class="bad">fail</span>{% endif %}</td>
+<td>{{ "%.4f"|format(c.value) if c.value is not none else "" }}</td>
+<td>{{ "%.4f"|format(c.base_value) if c.base_value is not none else "" }}</td>
+<td>{{ "%.4f"|format(c.delta) if c.delta is not none else "" }}</td>
+<td>{{ c.comparator }} {{ c.threshold if c.threshold is not none else "" }}</td>
+<td>{{ c.estimator }}{% if c.mock %} <span class="warn">(mock)</span>{% endif %}</td></tr>
+{% else %}
+<tr><td colspan="8" class="muted">Delivered image is the unrefined Cycles render (ground truth); no refinement checks apply.</td></tr>
+{% endfor %}
+</table>
+<div class="muted">Attempts: {{ v.attempts|length }} · {% for line in logs[v.view_id] %}{{ line }}{% if not loop.last %} · {% endif %}{% endfor %}</div>
+{% endfor %}
+
+<h2>Gates</h2>
+<table><tr><th>Gate</th><th>Status</th><th>Policy</th><th>Decided by</th><th>Notes</th></tr>
+{% for g in gates %}<tr><td>{{ g.gate }}</td><td>{{ g.status }}</td><td>{{ g.policy }}</td><td>{{ g.decided_by or "" }}</td><td>{{ g.notes or "" }}</td></tr>{% endfor %}
+</table>
+
+<h2>Assumptions</h2>
+<table><tr><th>Stage</th><th>Key</th><th>Value</th><th>Reason</th></tr>
+{% for a in assumptions %}<tr><td>{{ a.stage }}</td><td>{{ a.key }}</td><td><code>{{ a.value }}</code></td><td>{{ a.reason }}</td></tr>{% endfor %}
+</table>
+
+<h2>Plan validation</h2>
+{% if plan_issues %}
+<table><tr><th>Code</th><th>Severity</th><th>Message</th><th>Fix hint</th></tr>
+{% for i in plan_issues %}<tr><td>{{ i.code }}</td><td>{{ i.severity }}</td><td>{{ i.message }}</td><td>{{ i.fix_hint }}</td></tr>{% endfor %}
+</table>
+{% else %}<p class="ok">All plan validators passed.</p>{% endif %}
+
+<h2>Reproducibility</h2>
+<table>
+<tr><th>Git commit</th><td><code>{{ manifest.git_commit or "unknown" }}</code></td></tr>
+<tr><th>Image digest</th><td><code>{{ manifest.image_digest or "not running in the release image" }}</code></td></tr>
+<tr><th>Config hash</th><td><code>{{ manifest.config_hash }}</code></td></tr>
+<tr><th>Models</th><td>{% for m in manifest.models %}<code>{{ m.role }}={{ m.name }}{% if m.revision %}@{{ m.revision[:12] }}{% endif %}{% if m.mock %} (mock){% endif %}</code> {% endfor %}</td></tr>
+<tr><th>Seeds</th><td>{% for k, s in manifest.seeds.items() %}<code>{{ k }}={{ s }}</code> {% endfor %}</td></tr>
+<tr><th>Environment</th><td>{% for k, val in manifest.environment.items() %}<code>{{ k }}={{ val }}</code> {% endfor %}</td></tr>
+<tr><th>Degradations</th><td>{% for d in manifest.degradations %}{{ d.stage }}: {{ d.rung }} ({{ d.reason }}); {% else %}none{% endfor %}</td></tr>
+</table>
+<h2>Stage timings</h2>
+<table><tr><th>Stage</th><th>Cached</th><th>Seconds</th></tr>
+{% for t in manifest.timings %}<tr><td>{{ t.stage }}</td><td>{{ "yes" if t.cached else "no" }}</td><td>{{ "%.2f"|format(t.seconds) }}</td></tr>{% endfor %}
+</table>
+</body>
+</html>

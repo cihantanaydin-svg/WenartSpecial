@@ -1,0 +1,55 @@
+# Procedural seed materials (firm-owned definitions, no textures). The CC0 PBR library (Poly Haven,
+# ambientCG) is added in Phase 5 with the same schema plus texture maps and real-world tile sizes.
+# Colours are sRGB hex; the compiler converts them to linear for Blender.
+materials:
+  - id: paint_warm_white
+    category: wall
+    color: "#ECE6DA"
+    roughness: 0.85
+    texture_size_m: [1.0, 1.0]
+    license: proprietary-firm
+  - id: paint_ceiling_white
+    category: ceiling
+    color: "#F4F3EF"
+    roughness: 0.9
+    texture_size_m: [1.0, 1.0]
+    license: proprietary-firm
+  - id: oak_floor_natural
+    category: floor
+    color: "#B08A5E"
+    roughness: 0.45
+    texture_size_m: [1.2, 0.18]
+    license: proprietary-firm
+  - id: stone_porcelain_grey
+    category: floor
+    color: "#9C9A95"
+    roughness: 0.35
+    texture_size_m: [0.6, 0.6]
+    license: proprietary-firm
+  - id: door_oak_veneer
+    category: door_leaf
+    color: "#8C6A45"
+    roughness: 0.5
+    texture_size_m: [0.9, 2.1]
+    license: proprietary-firm
+  - id: frame_aluminium_anthracite
+    category: opening_frame
+    color: "#3A3D40"
+    roughness: 0.35
+    metallic: 0.8
+    texture_size_m: [1.0, 1.0]
+    license: proprietary-firm
+  - id: glass_clear
+    category: glass
+    color: "#FFFFFF"
+    roughness: 0.0
+    transmission: 1.0
+    ior: 1.52
+    texture_size_m: [1.0, 1.0]
+    license: proprietary-firm
+  - id: skirting_white
+    category: skirting
+    color: "#F0EEE8"
+    roughness: 0.4
+    texture_size_m: [1.0, 1.0]
+    license: proprietary-firm

@@ -1,0 +1,272 @@
+# Model registry (principle 6). Evidence per entry: docs/MODEL_SELECTION.md (checked 2026-09-30).
+# Revisions and per-file SHA256 are pinned by scripts/pin_models.py into configs/models.lock.yaml,
+# and download_models.py re-checks the Hub licence tag against `license.id` (refuses on mismatch).
+# `impl: null` = weights registered, runtime implementation lands in the phase noted in PROGRESS.md.
+models:
+  # ---------------------------------------------------------------- VLM (ADR-M01, M02)
+  - name: qwen3.6-27b-fp8
+    role: vlm
+    repo: Qwen/Qwen3.6-27B-FP8
+    license: {id: apache-2.0, class: permissive, url: https://www.apache.org/licenses/LICENSE-2.0,
+              evidence_url: https://huggingface.co/Qwen/Qwen3.6-27B-FP8, checked_at: 2026-09-30}
+    commercial_ok: true
+    runtime: vllm>=0.26
+    vram_gb: 38
+    disk_gb: 31
+    fallback: qwen3.8-27b-fp8
+    notes: primary; thinking off for JSON; response_format json_schema
+  - name: qwen3.8-27b-fp8
+    role: vlm
+    repo: Qwen/Qwen3.8-27B-FP8
+    license: {id: apache-2.0, class: permissive,
+              evidence_url: https://github.com/QwenLM/Qwen3.8, checked_at: 2026-09-30}
+    commercial_ok: true
+    runtime: vllm>=0.26
+    vram_gb: 38
+    disk_gb: 31
+    notes: challenger; multimodal serving not yet recipe-verified; promoted by Phase-2 A/B
+  - name: gemma-4-31b-it-qat
+    role: judge2
+    repo: google/gemma-4-31B-it-qat-w4a16-ct
+    license: {id: apache-2.0, class: permissive,
+              evidence_url: https://opensource.googleblog.com/2026/03/gemma-4-expanding-the-gemmaverse-with-apache-20.html,
+              checked_at: 2026-09-30}
+    commercial_ok: true
+    runtime: vllm>=0.19.1
+    vram_gb: 22
+    disk_gb: 20
+    fallback: ministral-3-14b
+  - name: gemma-4-31b-it-fp8
+    role: judge2
+    repo: RedHatAI/gemma-4-31B-it-FP8-dynamic
+    license: {id: apache-2.0, class: permissive,
+              evidence_url: https://opensource.googleblog.com/2026/03/gemma-4-expanding-the-gemmaverse-with-apache-20.html,
+              checked_at: 2026-09-30}
+    commercial_ok: true
+    runtime: vllm>=0.19.1
+    vram_gb: 38
+    disk_gb: 33
+    notes: never the FP8_BLOCK variant (vLLM issue 39407)
+  - name: ministral-3-14b
+    role: judge2
+    repo: mistralai/Ministral-3-14B-Instruct-2512
+    license: {id: apache-2.0, class: permissive,
+              evidence_url: https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512, checked_at: 2026-09-30}
+    commercial_ok: true
+    runtime: vllm>=0.11
+    vram_gb: 17
+    disk_gb: 15
+  # ---------------------------------------------------------------- OCR / layout (ADR-M03)
+  - name: paddleocr-vl-1.6
+    role: ocr
+    repo: PaddlePaddle/PaddleOCR-VL-1.6
+    license: {id: apache-2.0, class: permissive,
+              evidence_url: https://github.com/PaddlePaddle/PaddleOCR/blob/main/LICENSE, checked_at: 2026-09-30}
+    commercial_ok: true
+    runtime: transformers>=5.17
+    vram_gb: 3
+    disk_gb: 2
+    fallback: rapidocr-ppocr
+    notes: primary incl. Turkish; full-resolution tiles only
+  - name: pp-doclayout-v3
+    role: layout
+    repo: PaddlePaddle/PP-DocLayoutV3_safetensors
+    license: {id: apache-2.0, class: permissive,
+              evidence_url: https://huggingface.co/PaddlePaddle/PP-DocLayoutV3_safetensors, checked_at: 2026-09-30}
+    commercial_ok: true
+    runtime: transformers>=5.17
+    vram_gb: 1
+    disk_gb: 0.3
+  - name: glm-ocr
+    role: ocr
+    repo: zai-org/GLM-OCR
+    license: {id: mit, class: permissive, evidence_url: https://github.com/zai-org/GLM-OCR, checked_at: 2026-09-30}
+    commercial_ok: true
+    runtime: vllm>=0.19
+    vram_gb: 3
+    disk_gb: 2.5
+    notes: English documents only (no Turkish); SDK maas.enabled=false
+  - name: rapidocr-ppocr
+    role: ocr
+    repo: RapidAI/RapidOCR
+    license: {id: apache-2.0, class: permissive, evidence_url: https://github.com/RapidAI/RapidOCR, checked_at: 2026-09-30}
+    commercial_ok: true
+    runtime: onnxruntime
+    vram_gb: 0
+    disk_gb: 0.2
+    notes: deterministic line boxes; Turkish fallback (PP-OCRv5/v6 Latin)
+  # ---------------------------------------------------------------- segmentation (ADR-M04)
+  - name: sam3
+    role: segmenter
+    repo: facebook/sam3
+    gated: true
+    license: {id: sam-license, class: conditional, terms_id: sam-license-2025-11-19,
+              url: https://github.com/facebookresearch/sam3/blob/main/LICENSE,
+              evidence_url: https://github.com/facebookresearch/sam3/blob/main/LICENSE, checked_at: 2026-09-30,
+              obligations: ["screen clients against trade-control/sanctions lists",
+                            "no military/ITAR/nuclear/espionage use", "indemnify Meta",
+                            "keep a LICENSE snapshot per downloaded revision (terms may change)"]}
+    commercial_ok: true
+    runtime: transformers>=5.17
+    vram_gb: 4
+    disk_gb: 3.5
+    fallback: grounded-sam2
+  - name: grounded-sam2
+    role: segmenter
+    repo: facebook/sam2.1-hiera-large
+    license: {id: apache-2.0, class: permissive,
+              evidence_url: https://github.com/facebookresearch/sam2/blob/main/LICENSE, checked_at: 2026-09-30}
+    commercial_ok: true
+    runtime: transformers>=5.17
+    vram_gb: 3
+    disk_gb: 1.8
+    notes: SAM 2.1-L masks prompted by IDEA-Research/grounding-dino-base boxes (Apache-2.0)
+  # ---------------------------------------------------------------- depth (ADR-M05)
+  - name: da3-mono-large
+    role: depth
+    repo: depth-anything/DA3MONO-LARGE
+    license: {id: apache-2.0, class: permissive,
+              evidence_url: https://github.com/ByteDance-Seed/Depth-Anything-3/blob/main/README.md, checked_at: 2026-09-30}
+    commercial_ok: true
+    runtime: depth-anything-3>=0.1.1
+    vram_gb: 2
+    disk_gb: 1.4
+    fallback: moge-2-vitl-normal
+    notes: only DA3-SMALL/BASE/MONO-LARGE/METRIC-LARGE are Apache; others are CC BY-NC
+  - name: moge-2-vitl-normal
+    role: depth
+    repo: Ruicheng/moge-2-vitl-normal
+    license: {id: mit, class: permissive, evidence_url: https://github.com/microsoft/MoGe/blob/main/LICENSE,
+              checked_at: 2026-09-30}
+    commercial_ok: true
+    runtime: moge
+    vram_gb: 2
+    disk_gb: 1.3
+  # ---------------------------------------------------------------- embeddings (ADR-M07)
+  - name: siglip2-so400m
+    role: embedder
+    repo: google/siglip2-so400m-patch16-384
+    license: {id: apache-2.0, class: permissive,
+              evidence_url: https://github.com/google-research/big_vision/blob/main/LICENSE, checked_at: 2026-09-30}
+    commercial_ok: true
+    runtime: transformers>=5.17
+    vram_gb: 3
+    disk_gb: 4.5
+  # ---------------------------------------------------------------- refinement / concept (ADR-M08, M09)
+  - name: qwen-image-edit-2511
+    role: refiner
+    repo: Qwen/Qwen-Image-Edit-2511
+    license: {id: apache-2.0, class: permissive,
+              evidence_url: https://github.com/QwenLM/Qwen-Image/blob/main/LICENSE, checked_at: 2026-09-30}
+    commercial_ok: true
+    runtime: diffusers>=0.40,<0.41
+    vram_gb: 64
+    disk_gb: 58
+    fallback: flux2-klein-4b
+    notes: QwenImageEditPlusPipeline has no strength/mask; our per-pixel strength wrapper (ADR-S07)
+  - name: flux2-klein-4b
+    role: refiner
+    repo: black-forest-labs/FLUX.2-klein-4B
+    license: {id: apache-2.0, class: permissive,
+              evidence_url: https://github.com/black-forest-labs/flux2/blob/main/README.md, checked_at: 2026-09-30}
+    commercial_ok: true
+    runtime: diffusers>=0.40,<0.41
+    vram_gb: 13
+    disk_gb: 16
+    notes: Flux2KleinInpaintPipeline (image, image_reference, mask_image, strength)
+  - name: qwen-image-2512
+    role: concept
+    repo: Qwen/Qwen-Image-2512
+    license: {id: apache-2.0, class: permissive,
+              evidence_url: https://github.com/QwenLM/Qwen-Image/blob/main/LICENSE, checked_at: 2026-09-30}
+    commercial_ok: true
+    runtime: diffusers>=0.40,<0.41
+    vram_gb: 60
+    disk_gb: 45
+    notes: with InstantX/Qwen-Image-ControlNet-Union (Apache-2.0)
+  # ---------------------------------------------------------------- upscaler / IQA (ADR-M11, M12)
+  - name: hat-real-gan-x4
+    role: upscaler
+    repo: XPixelGroup/HAT
+    license: {id: apache-2.0, class: permissive, evidence_url: https://github.com/XPixelGroup/HAT/blob/main/LICENSE,
+              checked_at: 2026-09-30}
+    commercial_ok: true
+    runtime: torch
+    vram_gb: 2
+    disk_gb: 0.2
+    fallback: realesrgan-x2plus
+  - name: realesrgan-x2plus
+    role: upscaler
+    repo: xinntao/Real-ESRGAN
+    license: {id: bsd-3-clause, class: permissive,
+              evidence_url: https://github.com/xinntao/Real-ESRGAN/blob/master/LICENSE, checked_at: 2026-09-30}
+    commercial_ok: true
+    runtime: torch
+    vram_gb: 1
+    disk_gb: 0.1
+  - name: laion-aesthetic
+    role: iqa
+    repo: christophschuhmann/improved-aesthetic-predictor
+    license: {id: apache-2.0, class: permissive,
+              evidence_url: https://github.com/christophschuhmann/improved-aesthetic-predictor/blob/main/LICENSE,
+              checked_at: 2026-09-30}
+    commercial_ok: true
+    runtime: torch
+    vram_gb: 2
+    disk_gb: 1.8
+    notes: ranking only, never gates
+  # ---------------------------------------------------------------- blocked (recorded so nobody enables them)
+  - name: trellis2-4b
+    role: image_to_3d
+    repo: microsoft/TRELLIS.2-4B
+    license: {id: mit, class: blocked, evidence_url: https://github.com/NVlabs/nvdiffrast/blob/main/LICENSE.txt,
+              checked_at: 2026-09-30}
+    commercial_ok: false
+    runtime: torch
+    notes: MIT weights but GLB export depends on nvdiffrast (NVIDIA non-commercial) and RMBG-2.0 (CC BY-NC)
+  - name: flux2-dev
+    role: refiner
+    repo: black-forest-labs/FLUX.2-dev
+    license: {id: flux-non-commercial, class: blocked,
+              evidence_url: https://github.com/black-forest-labs/flux2/blob/main/model_licenses/LICENSE-FLUX-NON-COMMERICAL,
+              checked_at: 2026-09-30}
+    commercial_ok: false
+    runtime: diffusers>=0.40,<0.41
+  - name: qwen-image-2.1
+    role: refiner
+    repo: Qwen/Qwen-Image-2.1
+    license: {id: qwen-research, class: blocked,
+              evidence_url: https://github.com/QwenLM/Qwen-Image-2.1/blob/main/LICENSE, checked_at: 2026-09-30}
+    commercial_ok: false
+    runtime: diffusers-main
+  - name: hunyuan3d-2.1
+    role: image_to_3d
+    repo: tencent/Hunyuan3D-2.1
+    license: {id: tencent-hunyuan-community, class: blocked,
+              evidence_url: https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1/blob/main/LICENSE, checked_at: 2026-09-30}
+    commercial_ok: false
+    territorial_exclusions: [EU, UK, KR]
+    caps: {mau: "1000000"}
+    runtime: torch
+  # ---------------------------------------------------------------- mocks (cpu_test profile only)
+  - name: mock-refiner
+    role: refiner
+    license: {id: proprietary-firm, class: proprietary}
+    commercial_ok: true
+    runtime: numpy
+    impl: archrender.models.mocks.impls:MockRefiner
+    mock: true
+  - name: mock-depth
+    role: depth
+    license: {id: proprietary-firm, class: proprietary}
+    commercial_ok: true
+    runtime: numpy
+    impl: archrender.models.mocks.impls:MockDepthEstimator
+    mock: true
+  - name: mock-segmenter
+    role: segmenter
+    license: {id: proprietary-firm, class: proprietary}
+    commercial_ok: true
+    runtime: numpy
+    impl: archrender.models.mocks.impls:MockTextSegmenter
+    mock: true

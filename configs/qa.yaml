@@ -1,0 +1,14 @@
+# QA thresholds (ARCHITECTURE §S9). Never weaken a threshold to get a test green.
+geometry:
+  edge_f_drop_max: 0.05          # F@3px (at qa_width) drop vs base render
+  depth_absrel_rise_max: 0.02    # AbsRel rise vs base (scale/shift aligned, structural mask)
+  opening_iou_drop_max: 0.05     # per-opening IoU drop vs base
+  verticals_max_deg: 0.5         # absolute (base is exact by construction)
+technical:
+  clipping_rise_max: 0.01        # rise in fraction of non-window pixels at 0 or 1 (vs base)
+  base_clipping_review: 0.05     # base render itself above this → flagged for review (exposure)
+  sharpness_ratio_min: 0.7       # Laplacian variance, refined / base
+  noise_rise_max: 0.01           # noise sigma rise vs base
+  material_delta_e_max: 5.0      # per structural material mean Lab vs base
+# Families that must be evaluated by non-mock estimators before Gate D may auto-pass.
+required_families: [geometry, technical, brief, artifact]

@@ -1,0 +1,23 @@
+name: cpu_test
+description: 'CPU-only tests: every model role mocked, tiny Cycles renders.'
+vram_budget_gb: 0
+min_system_ram_gb: 4
+roles:
+  refiner: mock-refiner
+  depth: mock-depth
+  segmenter: mock-segmenter
+render:
+  device: CPU
+  samples: 16
+  max_width: 640
+  max_height: 640
+refine:
+  global_megapixels: 0.05
+  tile_px: 256
+  tile_overlap_px: 32
+  best_of_n: 2
+  max_retries: 2
+  strength_structural: 0.15
+  strength_furniture: 0.3
+  strength_decor: 0.55
+qa_width: 256

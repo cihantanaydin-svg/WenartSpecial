@@ -1,0 +1,101 @@
+[project]
+name = "archrender"
+version = "0.1.0"
+description = "Project documents → verified 3D scene → photoreal renders of a selected section, on open-weight models."
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = { text = "Proprietary" }
+authors = [{ name = "ArchRender team" }]
+dependencies = [
+    "pydantic>=2.13,<3",
+    "pydantic-settings>=2.15,<3",
+    "fastapi>=0.142,<0.143",
+    "uvicorn>=0.54,<0.55",
+    "httpx>=0.28,<0.29",
+    "pyyaml>=6.0,<7",
+    "numpy>=2.5,<3",
+    "shapely>=2.1,<3",
+    "manifold3d>=3.5,<4",
+    "opencv-python-headless>=5.0,<6",
+    "openexr>=3.5,<4",
+    "pillow>=12.3,<13",
+    "jinja2>=3.1,<4",
+    "puremagic>=2.2,<3",
+    "scipy>=1.18,<2",
+]
+
+[project.optional-dependencies]
+# GPU runtime (installed in the image, not needed for CPU tests with mocks).
+gpu = [
+    "torch>=2.14,<2.15",
+    "diffusers>=0.40,<0.41",
+    "transformers>=5.17,<6",
+    "accelerate>=1.15,<2",
+    "huggingface-hub>=1.23,<2.0",
+    "nvidia-ml-py>=13.580",
+]
+
+[project.scripts]
+archrender = "archrender.cli.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1",
+    "pytest-timeout>=2.4",
+    "hypothesis>=6.168",
+    "ruff>=0.16",
+    "mypy>=2.3",
+    "types-PyYAML>=6.0",
+    "playwright>=1.63",
+    "pre-commit>=4.3",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/archrender", "src/archrender_blender"]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "scripts", "deploy"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF", "N", "PT", "C4"]
+ignore = [
+    "S101",   # assert is fine in tests and invariant checks
+    "S603",   # subprocess calls are deliberate and use argument lists
+    "S607",
+    "RUF001", "RUF002", "RUF003",  # unicode (Turkish, ×, →) in strings/comments is intended
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "N802"]
+"src/archrender_blender/**" = ["N", "S"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/archrender"]
+plugins = ["pydantic.mypy"]
+warn_unused_configs = true
+ignore_missing_imports = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["archrender.core.*", "archrender.pipeline.*", "archrender.models.*"]
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+timeout = 600
+markers = [
+    "blender: needs a Blender runtime (binary or bpy module); skipped when unavailable",
+    "e2e: end-to-end through a live server",
+    "gpu: needs a CUDA GPU; skipped otherwise",
+]

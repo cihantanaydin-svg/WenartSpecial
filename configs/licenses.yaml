@@ -1,0 +1,32 @@
+# Licence allowlist used by the LicenseGate (models, assets) and scripts/license_audit.py (packages).
+# SPDX-style lowercase ids. Anything not listed is rejected.
+models:
+  permissive: [apache-2.0, mit, bsd-2-clause, bsd-3-clause, cc0-1.0, isc]
+  conditional: [sam-license, cc-by-4.0, creativeml-openrail-m, dinov3-license]
+  blocked: [cc-by-nc-4.0, cc-by-nc-sa-4.0, flux-non-commercial, qwen-research, tencent-hunyuan-community,
+            polyform-noncommercial-1.0.0, nvidia-source-code-license-nc, stability-community, llama3.1,
+            llama4, agpl-3.0, s-lab-1.0, mineru-open-source, ai-pubs-open-rail-m-modified]
+
+packages:
+  # Allowed in the network service (linked in-process).
+  allowed: [MIT, MIT-CMU, BSD, BSD-2-Clause, BSD-3-Clause, 0BSD, ISC, Apache-2.0, PSF-2.0, Python-2.0,
+            Zlib, CC0-1.0, Unlicense, MPL-2.0, LGPL-2.1-or-later, LGPL-3.0-or-later, HPND, BSL-1.0,
+            Apache-2.0 WITH LLVM-exception, CNRI-Python, Unicode-DFS-2016, BlueOak-1.0.0]
+  # Never allowed in-process (network service).
+  blocked: [AGPL-3.0, AGPL-3.0-only, AGPL-3.0-or-later, GPL-2.0, GPL-2.0-only, GPL-2.0-or-later,
+            GPL-3.0, GPL-3.0-only, GPL-3.0-or-later, SSPL-1.0, PolyForm-Noncommercial-1.0.0,
+            CC-BY-NC-4.0, CC-BY-NC-SA-4.0]
+  # Explicitly blocked package names regardless of declared metadata (research findings).
+  blocked_names: [pyiqa, pymupdf, fitz, ultralytics, nvdiffrast, smplx, pillow-heif, pdf2image, ocrmypdf]
+  # Packages whose metadata is missing/ambiguous, verified manually (evidence URL + date).
+  verified:
+    openexr: {license: BSD-3-Clause, evidence: "https://github.com/AcademySoftwareFoundation/openexr/blob/main/LICENSE.md", checked_at: 2026-09-30}
+    manifold3d: {license: Apache-2.0, evidence: "https://github.com/elalish/manifold/blob/master/LICENSE", checked_at: 2026-09-30}
+    scikit-image: {license: BSD-3-Clause, evidence: "https://github.com/scikit-image/scikit-image/blob/main/LICENSE.txt", checked_at: 2026-09-30}
+  # Tools run only as separate processes (arm's length); GPL permitted there.
+  subprocess_tools:
+    blender: GPL-3.0-or-later
+    libredwg: GPL-3.0-or-later
+    libheif: LGPL-3.0-or-later
+    litestream: Apache-2.0
+    supervisor: BSD-derived

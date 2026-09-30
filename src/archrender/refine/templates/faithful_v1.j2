@@ -1,0 +1,8 @@
+Photorealistic architectural interior photograph of the same room, {{ style }} style.
+Keep every wall, window, door, ceiling line and floor edge exactly where it is; same camera, same perspective, verticals vertical.
+Materials:{% for surface, material in surfaces %} {{ surface }}: {{ material }};{% endfor %}
+Lighting: {{ mood }}, {{ cct }} K colour temperature, physically plausible soft shadows and reflections.
+Add fine photographic detail, natural material texture and subtle lens characteristics only.
+{% if decor == "none" %}Do not add objects.{% else %}Decor density: {{ decor }}.{% endif %}
+{% if avoid %}Avoid: {{ avoid | join(", ") }}.{% endif %}
+No people, no text, no watermarks.

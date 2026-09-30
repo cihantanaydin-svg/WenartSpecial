@@ -1,0 +1,32 @@
+name: gpu80
+description: 80 GB class (H100, A100 80GB), default. VLM sleeps while the BF16 refiner
+  is resident.
+vram_budget_gb: 76
+min_system_ram_gb: 96
+roles:
+  vlm: qwen3.6-27b-fp8
+  judge2: gemma-4-31b-it-qat
+  ocr: paddleocr-vl-1.6
+  layout: pp-doclayout-v3
+  segmenter: sam3
+  depth: da3-mono-large
+  embedder: siglip2-so400m
+  refiner: qwen-image-edit-2511
+  concept: qwen-image-2512
+  upscaler: hat-real-gan-x4
+  iqa: laion-aesthetic
+render:
+  device: GPU
+  samples: 512
+  max_width: 3840
+  max_height: 2160
+refine:
+  global_megapixels: 1.6
+  tile_px: 1328
+  tile_overlap_px: 256
+  best_of_n: 3
+  max_retries: 4
+  strength_structural: 0.15
+  strength_furniture: 0.3
+  strength_decor: 0.55
+qa_width: 2048

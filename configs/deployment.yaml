@@ -1,0 +1,8 @@
+# Deployment policy (owner answers 2026-09-30, see docs/PLAN.md).
+jurisdictions: [TR]
+accepted_license_terms:
+  - sam-license-2025-11-19     # Q-3: SAM License accepted (obligations in THIRD_PARTY_LICENSES.md)
+commercial_licenses: {}         # e.g. flux-non-commercial: <sha256 of the purchased BFL licence file>
+allow_revenue_or_mau_caps: false
+datacenters_preferred: [EU-RO-1, EU-CZ-1]
+training_use_of_client_documents: false   # Q-4
