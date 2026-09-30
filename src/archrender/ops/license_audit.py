@@ -51,6 +51,10 @@ TEXT_SPDX = [
     (re.compile(r"^\s*bsd[- ]2[- ]clause\s*$", re.I), "BSD-2-Clause"),
     (re.compile(r"^\s*(new |modified |3-clause )?bsd( license)?\s*$", re.I), "BSD-3-Clause"),
     (re.compile(r"^\s*psfl?(-2\.0)?\s*$", re.I), "PSF-2.0"),
+    (
+        re.compile(r"^\s*apache(\s+license)?[ ,-]*(v(ersion)?\s*)?2(\.0)?(\s+license)?\s*$", re.I),
+        "Apache-2.0",
+    ),
     (re.compile(r"^\s*isc( license)?\s*$", re.I), "ISC"),
     (re.compile(r"^\s*mpl[- ]2\.0\s*$", re.I), "MPL-2.0"),
 ]
@@ -165,6 +169,7 @@ def audit(
     allowed, blocked = set(cfg["allowed"]), set(cfg["blocked"])
     blocked_names = {n.lower() for n in cfg["blocked_names"]}
     verified = {k.lower(): v for k, v in (cfg.get("verified") or {}).items()}
+    vendor = cfg.get("vendor_runtime") or {}
     problems: list[str] = []
     pkgs: list[Pkg] = []
     keep = prod_names() if prod_only else None
@@ -181,6 +186,13 @@ def audit(
             if keep is not None and py is None and name not in keep:
                 continue
             lic = verified[name]["license"] if name in verified else spdx_of(d)
+            vendor_lic = next(
+                (v["license"] for pfx, v in vendor.items() if name.startswith(pfx)), None
+            )
+            if vendor_lic and (
+                lic == "UNKNOWN" or "nvidia" in lic.lower() or "proprietary" in lic.lower()
+            ):
+                lic = vendor_lic  # e.g. NVIDIA CUDA runtime wheels (redistributable under the CUDA EULA)
             pkgs.append(
                 Pkg(
                     name,
@@ -258,8 +270,62 @@ def write_report(pkgs: list[Pkg], extra: dict[str, Any], path: Path) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def audit_lock(lock: Path, *, fetch: Any = None) -> tuple[int, list[str]]:
+    """Pre-audit a hash-locked requirements file from PyPI metadata (no install needed).
+
+    Used for environments that are only built in the release image (vLLM), so licence problems
+    fail a pull request instead of the release. Same rules as the in-image audit.
+    """
+    import json as _json
+    import urllib.request
+    from concurrent.futures import ThreadPoolExecutor
+
+    cfg = yaml.safe_load((get_settings().configs_dir / "licenses.yaml").read_text())["packages"]
+    allowed, blocked = set(cfg["allowed"]), set(cfg["blocked"])
+    blocked_names = {n.lower() for n in cfg["blocked_names"]}
+    verified = {k.lower(): v for k, v in (cfg.get("verified") or {}).items()}
+    vendor = cfg.get("vendor_runtime") or {}
+    pins = re.findall(r"^([A-Za-z0-9_.\-]+)==([^\s\\]+)", lock.read_text(), re.M)
+
+    def pypi(name: str, version: str) -> dict[str, Any]:
+        with urllib.request.urlopen(
+            f"https://pypi.org/pypi/{name}/{version}/json", timeout=30
+        ) as r:
+            info = _json.load(r)["info"]
+        return {
+            "license": info.get("license"),
+            "expression": info.get("license_expression"),
+            "classifiers": info.get("classifiers") or [],
+        }
+
+    get = fetch or pypi
+    with ThreadPoolExecutor(16) as ex:
+        metas = list(ex.map(lambda p: get(*p), pins))
+    problems = []
+    for (name, version), meta in zip(pins, metas, strict=True):
+        key = name.lower().replace("_", "-")
+        lic = verified[key]["license"] if key in verified else spdx_of(meta)
+        vendor_lic = next((v["license"] for pfx, v in vendor.items() if key.startswith(pfx)), None)
+        if vendor_lic and (
+            lic == "UNKNOWN" or "nvidia" in lic.lower() or "proprietary" in lic.lower()
+        ):
+            lic = vendor_lic
+        if key in blocked_names:
+            problems.append(f"{lock.name}: {name} {version} is explicitly blocked ({lic})")
+        elif lic == "UNKNOWN":
+            problems.append(
+                f"{lock.name}: {name} {version} has no machine-readable licence; verify and add to licenses.yaml"
+            )
+        elif not allowed_expression(lic, allowed, blocked):
+            problems.append(f"{lock.name}: {name} {version} licence '{lic}' is not allowed")
+    return len(pins), problems
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "--lock", type=Path, help="pre-audit a locked requirements file via PyPI metadata"
+    )
     ap.add_argument(
         "--python", action="append", default=[], help="extra interpreters (vLLM, Blender venvs)"
     )
@@ -274,6 +340,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--out", default=str(get_settings().app_root() / "THIRD_PARTY_LICENSES.md"))
     args = ap.parse_args(argv)
+    if args.lock:
+        n, problems = audit_lock(args.lock)
+        print(f"pre-audited {n} pinned packages of {args.lock} from PyPI metadata")
+        for p in problems:
+            print(f"LICENCE VIOLATION: {p}", file=sys.stderr)
+        return 1 if problems else 0
     pythons: list[str | None] = [None, *args.python]
     pkgs, problems, extra = audit(pythons, args.prod_only, args.subprocess_python)
     write_report(pkgs, extra, Path(args.out))

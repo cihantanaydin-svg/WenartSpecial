@@ -310,7 +310,9 @@ class RunOrchestrator:
             },
             degradations=svc.models.degradations,
             timings=eng.timings,
-            uses_mocks=plan.source == "mock" or any(v.outcome.uses_mocks for v in views),
+            uses_mocks=plan.source == "mock"
+            or any(v.outcome.uses_mocks for v in views)
+            or svc.models.any_mock_used(),
         )
         gate_rows = [
             dict(r)

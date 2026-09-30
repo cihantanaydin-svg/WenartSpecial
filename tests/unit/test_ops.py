@@ -65,6 +65,15 @@ def _implemented_registry(repo_files: dict[str, str]) -> Registry:
     reg = Registry.load(CFG)
     entries = []
     for e in reg.entries():
+        if (
+            e.impl
+            and not e.mock
+            and not e.runtime.startswith("system:")
+            and e.name != "da3-mono-large"
+        ):
+            e = e.model_copy(
+                update={"impl": None}
+            )  # only the depth model counts as implemented here
         if e.name == "da3-mono-large":
             from archrender.models.registry import ModelFile
 
@@ -214,3 +223,25 @@ def test_spdx_from_classifiers() -> None:
 
 def test_deploy_manifest_is_fresh() -> None:
     assert deploy_manifest.main(["--check"]) == 0
+
+
+def test_lock_pre_audit_applies_the_same_rules(tmp_path: Path) -> None:
+    lock = tmp_path / "req.lock"
+    lock.write_text(
+        "good==1.0 \\\n    --hash=sha256:x\nnvidia-cublas==13.1 \\\nevil==2.0 \\\nmystery==0.1 \\\n"
+    )
+    meta = {
+        "good": {"license": None, "expression": "MIT", "classifiers": []},
+        "nvidia-cublas": {
+            "license": "LicenseRef-NVIDIA-Proprietary",
+            "expression": None,
+            "classifiers": [],
+        },
+        "evil": {"license": None, "expression": "AGPL-3.0-only", "classifiers": []},
+        "mystery": {"license": None, "expression": None, "classifiers": []},
+    }
+    n, problems = license_audit.audit_lock(lock, fetch=lambda name, version: meta[name])
+    assert n == 4
+    assert any("evil" in p and "not allowed" in p for p in problems)
+    assert any("mystery" in p and "no machine-readable" in p for p in problems)
+    assert not any("nvidia" in p or "good" in p for p in problems)

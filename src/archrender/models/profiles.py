@@ -45,6 +45,8 @@ class HardwareProfile(BaseModel):
     render: RenderProfile
     refine: RefineProfile
     qa_width: int = 2048
+    # share of GPU memory vLLM may take while awake (it sleeps during diffusion; ADR-S02)
+    vlm_gpu_memory_utilization: float = Field(default=0.5, gt=0, le=0.95)
     runpod_gpu_types: list[str] = Field(
         default_factory=list
     )  # RunPod v2 GPU type ids, preference order

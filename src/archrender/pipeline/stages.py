@@ -274,8 +274,8 @@ def build_stages(svc: Services) -> dict[str, StageDef[Any, Any]]:
             spec=spec,
             qa_width=prof.qa_width,
             config=svc.qa_config,
-            depth=svc.models.get("depth"),
-            segmenter=svc.models.get("segmenter"),
+            depth=svc.models.get_with_fallback("depth", "S9")[0],
+            segmenter=svc.models.get_with_fallback("segmenter", "S9")[0],
         )
         stored: list[CasRef] = []
 
@@ -291,7 +291,7 @@ def build_stages(svc: Services) -> dict[str, StageDef[Any, Any]]:
             base_sha=inp.render.beauty_png.sha256,
             passes=passes,
             spec=spec,
-            refiner=svc.models.get("refiner"),
+            refiner=svc.models.get_with_fallback("refiner", "S8")[0],
             qa=qa,
             profile=prof.refine,
             prompt=inp.prompt,

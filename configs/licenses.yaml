@@ -11,7 +11,8 @@ packages:
   # Allowed in the network service (linked in-process).
   allowed: [MIT, MIT-CMU, BSD, BSD-2-Clause, BSD-3-Clause, 0BSD, ISC, Apache-2.0, PSF-2.0, Python-2.0,
             Zlib, CC0-1.0, Unlicense, MPL-2.0, LGPL-2.1-or-later, LGPL-3.0-or-later, HPND, BSL-1.0,
-            Apache-2.0 WITH LLVM-exception, CNRI-Python, Unicode-DFS-2016, BlueOak-1.0.0]
+            Apache-2.0 WITH LLVM-exception, CNRI-Python, Unicode-DFS-2016, BlueOak-1.0.0, MIT-0,
+            LGPL-2.1-only, LicenseRef-NVIDIA-CUDA-EULA, LicenseRef-Repoze]
   # Never allowed in-process (network service).
   blocked: [AGPL-3.0, AGPL-3.0-only, AGPL-3.0-or-later, GPL-2.0, GPL-2.0-only, GPL-2.0-or-later,
             GPL-3.0, GPL-3.0-only, GPL-3.0-or-later, SSPL-1.0, PolyForm-Noncommercial-1.0.0,
@@ -24,6 +25,21 @@ packages:
     manifold3d: {license: Apache-2.0, evidence: "https://github.com/elalish/manifold/blob/master/LICENSE", checked_at: 2026-09-30}
     scikit-image: {license: BSD-3-Clause, evidence: "https://github.com/scikit-image/scikit-image/blob/main/LICENSE.txt", checked_at: 2026-09-30}
     pypdfium2: {license: Apache-2.0 AND BSD-3-Clause, evidence: "https://github.com/pypdfium2-team/pypdfium2#licensing", note: "PyPI metadata: BSD-3-Clause, Apache-2.0, dependency licenses (PDFium BSD-3-Clause + permissive notices); both obligations kept", checked_at: 2026-09-30}
+    # vLLM environment (deploy/vllm/requirements.lock): metadata missing for the pinned versions
+    instanttensor: {license: Apache-2.0, evidence: "PyPI 0.2.0 license text (Apache License 2.0)", checked_at: 2026-09-30}
+    humming-kernels: {license: Apache-2.0, evidence: "https://github.com/vllm-project/humming/blob/main/LICENSE", checked_at: 2026-09-30}
+    nvtx: {license: Apache-2.0 WITH LLVM-exception, evidence: "https://github.com/NVIDIA/NVTX/blob/release-v3/LICENSE.txt", checked_at: 2026-09-30}
+    openai-harmony: {license: Apache-2.0, evidence: "https://github.com/openai/harmony/blob/main/LICENSE", checked_at: 2026-09-30}
+    quack-kernels: {license: Apache-2.0, evidence: "https://github.com/Dao-AILab/quack/blob/main/LICENSE", checked_at: 2026-09-30}
+    tiktoken: {license: MIT, evidence: "https://github.com/openai/tiktoken/blob/main/LICENSE", checked_at: 2026-09-30}
+    tokenspeed-mla: {license: MIT, evidence: "https://github.com/lightseekorg/tokenspeed/blob/main/LICENSE", checked_at: 2026-09-30}
+    torchcodec: {license: BSD-3-Clause, evidence: "https://github.com/pytorch/torchcodec/blob/main/LICENSE", checked_at: 2026-09-30}
+    supervisor: {license: LicenseRef-Repoze, evidence: "https://github.com/Supervisor/supervisor/blob/main/LICENSES.txt (BSD-derived repoze licence)", checked_at: 2026-09-30}
+  # Vendor runtime wheels without SPDX metadata: accepted per ADR-M01's tool table (NVIDIA CUDA
+  # libraries, redistributable under the CUDA EULA; used, not modified).
+  vendor_runtime:
+    nvidia-: {license: LicenseRef-NVIDIA-CUDA-EULA, evidence: "https://docs.nvidia.com/cuda/eula/index.html"}
+    cuda-: {license: LicenseRef-NVIDIA-CUDA-EULA, evidence: "https://docs.nvidia.com/cuda/eula/index.html"}
   # Tools run only as separate processes (arm's length); GPL permitted there.
   subprocess_tools:
     blender: GPL-3.0-or-later

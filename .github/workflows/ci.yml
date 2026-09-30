@@ -44,6 +44,8 @@ jobs:
         run: uv run python scripts/check_no_stubs.py
       - name: deploy manifest is fresh
         run: uv run python -m archrender.ops.deploy_manifest --check
+      - name: vLLM environment licences (pre-audit of deploy/vllm/requirements.lock)
+        run: uv run python -m archrender.ops.license_audit --lock deploy/vllm/requirements.lock
       - name: JSON Schemas are fresh
         run: uv run python scripts/export_schemas.py --check
       - name: deploy.py dry run (no API calls; secrets masked)

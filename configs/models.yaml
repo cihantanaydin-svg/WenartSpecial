@@ -11,6 +11,7 @@ models:
               evidence_url: https://huggingface.co/Qwen/Qwen3.6-27B-FP8, checked_at: 2026-09-30}
     commercial_ok: true
     runtime: vllm>=0.26
+    impl: archrender.models.impls.vllm_vlm:VllmVlm
     vram_gb: 38
     disk_gb: 31
     fallback: qwen3.8-27b-fp8

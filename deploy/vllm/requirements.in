@@ -1,0 +1,2 @@
+# vLLM serving environment (ADR-S02): separate venv, OpenAI-compatible server for the VLM roles.
+vllm==0.30.0

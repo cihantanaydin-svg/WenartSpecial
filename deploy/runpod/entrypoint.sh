@@ -40,7 +40,10 @@ if [[ -d /opt/baked/models ]]; then
 fi
 
 log "downloading models for profile ${ARCHRENDER_PROFILE} (licence-gated, SHA-256 verified, resumable)"
-"$PY" -m archrender.ops.models download --profile "$ARCHRENDER_PROFILE"
+if ! "$PY" -m archrender.ops.models download --profile "$ARCHRENDER_PROFILE"; then
+  # keep booting: roles whose model is missing degrade (and /readyz lists them) instead of a restart loop
+  log "MODEL DOWNLOAD INCOMPLETE: see 'MODEL NOT INSTALLED' lines above; affected roles degrade"
+fi
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1  # no Hub access at runtime after the boot download
 
 "$PY" -m archrender.ops.preflight --migrate >/dev/null

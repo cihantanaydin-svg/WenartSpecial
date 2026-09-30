@@ -108,6 +108,7 @@ def pin(registry: Registry, gate: LicenseGate, hub: Hub, configs_dir: Path) -> d
 @dataclass
 class DownloadReport:
     installed: list[str] = field(default_factory=list)
+    failed: dict[str, str] = field(default_factory=dict)
     skipped: dict[str, str] = field(default_factory=dict)
     already: list[str] = field(default_factory=list)
 
@@ -138,79 +139,89 @@ def download(
     *,
     scope: Scope = "implemented",
     allow_unpinned: bool = False,
+    keep_going: bool = False,
 ) -> DownloadReport:
+    """Download the profile's models. ``keep_going`` records per-model failures in
+    ``report.failed`` instead of stopping at the first one (boot: the rest still installs)."""
     root = settings.data_dir / "models"
     installed_dir = root / "installed"
     installed_dir.mkdir(parents=True, exist_ok=True)
     report = DownloadReport()
     for role, name in profile.roles.items():
-        entry = registry.get(name)
-        if entry.mock:
-            report.skipped[name] = "mock"
-            continue
-        if scope == "implemented" and entry.impl is None:
-            report.skipped[name] = f"role {role}: runtime not implemented in this build"
-            continue
-        gate.check(entry)
-        if entry.runtime.startswith("system:"):
-            report.skipped[name] = "system package (installed in the image, no weights to download)"
-            continue
-        if not entry.repo:
-            raise ArchRenderError(
-                ErrorCode.VALIDATION, f"{name} has no repo.", "Fix configs/models.yaml."
-            )
-        if entry.revision is None and not allow_unpinned:
-            raise ArchRenderError(
-                ErrorCode.MODEL_NOT_DOWNLOADED,
-                f"{name} is not pinned (no revision in configs/models.lock.yaml).",
-                "Run `python -m archrender.ops.models pin` with Hub access and commit the lock file.",
-            )
-        marker = installed_dir / f"{name}.ok"
-        if marker.exists():
-            data = json.loads(marker.read_text())
-            if data.get("revision") == entry.revision:
-                report.already.append(name)
-                continue
         try:
-            info = hub.model_info(entry.repo, entry.revision)
-            check_hub_license(entry, info)
-            dest = root / "snapshots" / name / info.revision
-            hub.snapshot(entry.repo, info.revision, dest, entry.allow_patterns or None)
-        except HubAccessError as e:
-            raise _hub_error(entry, e) from e
-        verified = []
-        for f in entry.files:
-            local = dest / f.path
-            if not local.exists():
-                raise ArchRenderError(
-                    ErrorCode.MODEL_CHECKSUM_MISMATCH,
-                    f"{name}: pinned file {f.path} missing after download.",
-                    "Delete the snapshot directory and retry; check allow_patterns.",
+            entry = registry.get(name)
+            if entry.mock:
+                report.skipped[name] = "mock"
+                continue
+            if scope == "implemented" and entry.impl is None:
+                report.skipped[name] = f"role {role}: runtime not implemented in this build"
+                continue
+            gate.check(entry)
+            if entry.runtime.startswith("system:"):
+                report.skipped[name] = (
+                    "system package (installed in the image, no weights to download)"
                 )
-            digest = sha256_file(local)
-            if f.sha256 and digest != f.sha256:
+                continue
+            if not entry.repo:
                 raise ArchRenderError(
-                    ErrorCode.MODEL_CHECKSUM_MISMATCH,
-                    f"{name}: {f.path} SHA-256 mismatch.",
-                    "Delete the snapshot directory and retry; if it persists the upstream file changed: re-pin.",
-                    context={"expected": f.sha256, "actual": digest},
+                    ErrorCode.VALIDATION, f"{name} has no repo.", "Fix configs/models.yaml."
                 )
-            _dedupe(root, local, digest)
-            verified.append({"path": f.path, "sha256": digest})
-        marker.write_text(
-            json.dumps(
-                {
-                    "name": name,
-                    "repo": entry.repo,
-                    "revision": info.revision,
-                    "license": entry.license.id,
-                    "files": verified,
-                    "installed_at": now_iso(),
-                },
-                indent=1,
+            if entry.revision is None and not allow_unpinned:
+                raise ArchRenderError(
+                    ErrorCode.MODEL_NOT_DOWNLOADED,
+                    f"{name} is not pinned (no revision in configs/models.lock.yaml).",
+                    "Run `python -m archrender.ops.models pin` with Hub access and commit the lock file.",
+                )
+            marker = installed_dir / f"{name}.ok"
+            if marker.exists():
+                data = json.loads(marker.read_text())
+                if data.get("revision") == entry.revision:
+                    report.already.append(name)
+                    continue
+            try:
+                info = hub.model_info(entry.repo, entry.revision)
+                check_hub_license(entry, info)
+                dest = root / "snapshots" / name / info.revision
+                hub.snapshot(entry.repo, info.revision, dest, entry.allow_patterns or None)
+            except HubAccessError as e:
+                raise _hub_error(entry, e) from e
+            verified = []
+            for f in entry.files:
+                local = dest / f.path
+                if not local.exists():
+                    raise ArchRenderError(
+                        ErrorCode.MODEL_CHECKSUM_MISMATCH,
+                        f"{name}: pinned file {f.path} missing after download.",
+                        "Delete the snapshot directory and retry; check allow_patterns.",
+                    )
+                digest = sha256_file(local)
+                if f.sha256 and digest != f.sha256:
+                    raise ArchRenderError(
+                        ErrorCode.MODEL_CHECKSUM_MISMATCH,
+                        f"{name}: {f.path} SHA-256 mismatch.",
+                        "Delete the snapshot directory and retry; if it persists the upstream file changed: re-pin.",
+                        context={"expected": f.sha256, "actual": digest},
+                    )
+                _dedupe(root, local, digest)
+                verified.append({"path": f.path, "sha256": digest})
+            marker.write_text(
+                json.dumps(
+                    {
+                        "name": name,
+                        "repo": entry.repo,
+                        "revision": info.revision,
+                        "license": entry.license.id,
+                        "files": verified,
+                        "installed_at": now_iso(),
+                    },
+                    indent=1,
+                )
             )
-        )
-        report.installed.append(name)
+            report.installed.append(name)
+        except ArchRenderError as e:
+            if not keep_going:
+                raise
+            report.failed[name] = f"[{e.code}] {e.message} → {e.fix_hint}"
     return report
 
 
@@ -241,7 +252,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         profile = HardwareProfile.load(cfg, args.profile or settings.profile)
         needs_hub = any(
-            not registry.get(n).mock and (args.scope == "all" or registry.get(n).impl is not None)
+            not registry.get(n).mock
+            and not registry.get(n).runtime.startswith("system:")
+            and (args.scope == "all" or registry.get(n).impl is not None)
             for n in profile.roles.values()
         )
         if not needs_hub:
@@ -259,14 +272,23 @@ def main(argv: list[str] | None = None) -> int:
             HfHub(os.environ.get("HF_TOKEN")),
             scope=args.scope,
             allow_unpinned=args.allow_unpinned,
+            keep_going=True,
         )
         print(
             json.dumps(
-                {"installed": rep.installed, "already": rep.already, "skipped": rep.skipped},
+                {
+                    "installed": rep.installed,
+                    "already": rep.already,
+                    "skipped": rep.skipped,
+                    "failed": rep.failed,
+                },
                 indent=1,
+                ensure_ascii=False,
             )
         )
-        return 0
+        for name, why in rep.failed.items():
+            print(f"MODEL NOT INSTALLED: {name}: {why}", file=sys.stderr)
+        return 1 if rep.failed else 0
     except ArchRenderError as e:
         print(f"error [{e.code}]: {e.message}\n  → {e.fix_hint}", file=sys.stderr)
         return 2

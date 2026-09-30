@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import sys
 from pathlib import Path
 
 from archrender.core.config import get_settings
+from archrender.models.impls.vllm_vlm import VLLM_PORTS
 from archrender.models.profiles import HardwareProfile
 from archrender.models.registry import Registry
 
@@ -58,8 +60,23 @@ def vllm_roles(profile: HardwareProfile, registry: Registry) -> list[tuple[str, 
     return out
 
 
+def _installed_snapshot(data_dir: Path, name: str) -> Path | None:
+    marker = data_dir / "models" / "installed" / f"{name}.ok"
+    if not marker.exists():
+        return None
+    revision = json.loads(marker.read_text()).get("revision")
+    snap = data_dir / "models" / "snapshots" / name / str(revision)
+    return snap if snap.is_dir() else None
+
+
 def render(
-    profile: HardwareProfile, registry: Registry, logs: Path, *, venv: str, litestream: str | None
+    profile: HardwareProfile,
+    registry: Registry,
+    logs: Path,
+    *,
+    venv: str,
+    litestream: str | None,
+    data_dir: Path | None = None,
 ) -> str:
     py = f"{venv}/bin/python"
     parts = [HEADER.format(logs=logs)]
@@ -93,12 +110,14 @@ def render(
                 logs=logs,
             )
         )
-    for i, (role, name) in enumerate(vllm_roles(profile, registry)):
-        port = 8101 + i
-        model_dir = f"/workspace/models/snapshots/{name}"
+    for role, name in vllm_roles(profile, registry):
+        snap = _installed_snapshot(data_dir, name) if data_dir is not None else None
+        if snap is None:
+            continue  # weights not installed: the role degrades (readiness/manifests say so)
+        port = VLLM_PORTS[role]
         cmd = (
-            f"/opt/venv-vllm/bin/vllm serve {model_dir} --host 127.0.0.1 --port {port} --served-model-name {name}"
-            " --enable-sleep-mode --max-model-len 32768"
+            f"/opt/venv-vllm/bin/vllm serve {snap} --host 127.0.0.1 --port {port} --served-model-name {name}"
+            f" --enable-sleep-mode --max-model-len 32768 --gpu-memory-utilization {profile.vlm_gpu_memory_utilization}"
         )
         parts.append(
             PROGRAM.format(
@@ -106,6 +125,9 @@ def render(
                 command=cmd,
                 autostart="true" if role == "vlm" else "false",
                 logs=logs,
+            ).replace(
+                'environment=PYTHONUNBUFFERED="1"',
+                'environment=PYTHONUNBUFFERED="1",VLLM_SERVER_DEV_MODE="1",VLLM_NO_USAGE_STATS="1"',
             )
         )
     return "\n".join(parts)
@@ -123,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
         s.data_dir / "logs",
         venv=args.venv,
         litestream=shutil.which("litestream"),
+        data_dir=s.data_dir,
     )
     Path(args.out).write_text(text)
     print(f"wrote {args.out}")

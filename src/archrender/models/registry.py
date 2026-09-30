@@ -84,6 +84,9 @@ class RegistryEntry(BaseModel):
 
 
 class Registry:
+    def names(self) -> set[str]:
+        return set(self._by_name)
+
     def __init__(self, entries: list[RegistryEntry]) -> None:
         self._by_name: dict[str, RegistryEntry] = {}
         for e in entries:

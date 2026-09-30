@@ -117,3 +117,28 @@ def test_manager_loads_mocks_and_evicts_lru() -> None:
     mgr2.get("refiner")
     mgr2.get("depth")  # 3 + 3 > 5 → refiner evicted
     assert mgr2.used_vram_gb() == 3.0
+
+
+def test_gpu_profile_degrades_unimplemented_roles_to_mocks_and_stays_ready(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Regression: on a GPU profile, roles without a runtime in this build must run on their mock
+    (recorded as a degradation) instead of failing every run and keeping /readyz red forever."""
+    import shutil
+
+    from archrender.core.config import Settings
+    from archrender.ops.readiness import models_present
+    from archrender.pipeline.services import Services
+
+    svc = Services.create(
+        Settings(data_dir=tmp_path / "ws", db_path=tmp_path / "db.sqlite", profile="gpu80")
+    )
+    _, entry = svc.models.get_with_fallback("refiner", "S8")
+    assert entry.name == "mock-refiner" and svc.models.any_mock_used()
+    assert svc.models.ref("refiner").mock
+    assert any(
+        "refiner: qwen-image-edit-2511 → mock-refiner" in d.rung for d in svc.models.degradations
+    )
+    ok, missing, degraded = models_present(svc)
+    if shutil.which("tesseract"):
+        assert ok and not missing, missing
+    assert any(d.startswith("refiner:") for d in degraded)
+    assert any(d.startswith("ocr: paddleocr-vl-1.6 → tesseract-5") for d in degraded)

@@ -36,6 +36,9 @@ class ModelManager:
         self._vram: dict[str, float] = {}
         self.degradations: list[Degradation] = []
         self.load_seconds: dict[str, float] = {}
+        self._resolved: dict[str, RegistryEntry] = {}
+        self._unavailable: dict[str, tuple[float, ArchRenderError]] = {}  # role → (until, error)
+        self.unavailable_ttl_s = 600.0
 
     def entry_for(self, role: str) -> RegistryEntry:
         name = self.profile.roles.get(role)
@@ -55,7 +58,21 @@ class ModelManager:
         return entry
 
     def ref(self, role: str) -> ModelRef:
-        return self.entry_for(role).ref()
+        """The model actually used for ``role`` (after fallbacks), else the profile's choice."""
+        return (self._resolved.get(role) or self.entry_for(role)).ref()
+
+    def chain(self, role: str) -> list[RegistryEntry]:
+        """Profile model, its fallbacks, then the role's mock (if the registry has one)."""
+        out = [self.entry_for(role)]
+        while out[-1].fallback and out[-1].fallback not in {e.name for e in out}:
+            out.append(self.registry.get(out[-1].fallback))
+        mock = f"mock-{role}"
+        if mock in self.registry.names() and mock not in {e.name for e in out}:
+            out.append(self.registry.get(mock))
+        return out
+
+    def any_mock_used(self) -> bool:
+        return any(e.mock for e in self._resolved.values())
 
     def used_vram_gb(self) -> float:
         return sum(self._vram.values())
@@ -84,32 +101,43 @@ class ModelManager:
         return impl
 
     def get_with_fallback(self, role: str, stage: str) -> tuple[Any, RegistryEntry]:
-        """The profile's model for ``role``, else the first usable entry of its fallback chain.
+        """The profile's model for ``role``, else the next usable entry of :meth:`chain`.
 
-        A model counts as unusable if it has no runtime in this build or fails to load (e.g. a
-        missing system package). Every step down the chain is recorded as a degradation.
+        A model is unusable if it has no runtime in this build, is licence-blocked or fails to
+        load (e.g. a missing system package). Each step down the chain, including the final step
+        to the role's mock, is recorded once as a degradation; results produced by a mock are
+        flagged as such downstream (QA checks, reports, manifests).
         """
-        entry = self.entry_for(role)
+        if role in self._resolved:
+            entry = self._resolved[role]
+            return self._load(entry), entry
+        cached = self._unavailable.get(role)
+        if cached and cached[0] > time.monotonic():
+            raise cached[1]  # recently found unusable: do not wait for it again on every page
         tried: list[str] = []
-        while True:
+        last: ArchRenderError | None = None
+        for entry in self.chain(role):
             try:
                 impl = self._load(entry)
-                for failed in tried:
-                    self.record_degradation(
-                        stage, f"{role}: {failed} → {entry.name}", "primary unavailable"
-                    )
-                return impl, entry
             except ArchRenderError as e:
                 if e.code not in (ErrorCode.MODEL_NOT_DOWNLOADED, ErrorCode.MODEL_LICENSE_BLOCKED):
                     raise
                 tried.append(f"{entry.name} ({e.message})")
-                if entry.fallback is None:
-                    raise ArchRenderError(
-                        ErrorCode.MODEL_NOT_DOWNLOADED,
-                        f"No usable model for role {role!r}: tried {'; '.join(tried)}.",
-                        e.fix_hint,
-                    ) from e
-                entry = self.registry.get(entry.fallback)
+                last = e
+                continue
+            if tried:
+                self.record_degradation(
+                    stage, f"{role}: {tried[0].split(' ')[0]} → {entry.name}", "; ".join(tried)
+                )
+            self._resolved[role] = entry
+            return impl, entry
+        err = ArchRenderError(
+            ErrorCode.MODEL_NOT_DOWNLOADED,
+            f"No usable model for role {role!r}: tried {'; '.join(tried)}.",
+            last.fix_hint if last else "Check the profile's role mapping.",
+        )
+        self._unavailable[role] = (time.monotonic() + self.unavailable_ttl_s, err)
+        raise err
 
     def _make_room(self, need_gb: float, keep: str) -> None:
         budget = self.profile.vram_budget_gb

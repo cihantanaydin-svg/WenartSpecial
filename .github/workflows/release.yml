@@ -85,6 +85,7 @@ jobs:
           tags: ${{ steps.name.outputs.image }}:candidate-${{ github.sha }}
           build-args: |
             GIT_COMMIT=${{ github.sha }}
+            INSTALL_VLLM=1
           provenance: mode=max
           sbom: true
       - name: smoke test the candidate (CPU runner, Blender binary mode)
@@ -98,7 +99,8 @@ jobs:
           ref="${{ steps.name.outputs.image }}@${{ steps.build.outputs.digest }}"
           mkdir -p out
           docker run --rm --entrypoint /opt/venv/bin/python -v "$PWD/out:/out" "$ref" \
-            -m archrender.ops.license_audit --prod-only --out /out/THIRD_PARTY_LICENSES.md
+            -m archrender.ops.license_audit --prod-only --python /opt/venv-vllm/bin/python \
+            --out /out/THIRD_PARTY_LICENSES.md
       - name: tag the verified digest
         run: |
           image="${{ steps.name.outputs.image }}"
