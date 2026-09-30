@@ -20,7 +20,7 @@ from archrender.core.hashing import sha256_file
 from archrender.core.ids import new_id, now_iso
 from archrender.core.paths import sanitize_filename
 from archrender.core.schemas.document import IntakeResult, PageRef, SkippedEntry, Tile
-from archrender.ingest.detect import Detected, check_supported, detect
+from archrender.ingest.detect import Detected, check_supported, container_kind, detect
 from archrender.ingest.sandbox import run_task, run_tool, which
 from archrender.pipeline.services import Services
 
@@ -262,6 +262,18 @@ def ingest_file(
     """Ingest one file (and, recursively, its children). Raises on failure of *this* file."""
     run = run or _Run(svc, project_id, svc.store(project_id))
     detected = detect(path)
+    if detected.kind == "zip":  # DOCX/XLSX/PPTX or a plain archive: read its directory, sandboxed
+        probe = run.store.scratch_dir("detect")
+        try:
+            names = run_task(
+                "zip_names",
+                {"path": str(path), "out": str(probe), "max_entries": svc.settings.zip_max_entries},
+                svc.settings,
+                probe,
+            )["meta"]["names"]
+        finally:
+            shutil.rmtree(probe, ignore_errors=True)
+        detected = container_kind(names)
     check_supported(detected, filename)
     sha = sha256_file(path)
     existing = svc.db.one(

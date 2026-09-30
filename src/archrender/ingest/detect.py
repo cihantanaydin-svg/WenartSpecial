@@ -1,8 +1,13 @@
-"""File type detection by content (magic bytes), never by extension."""
+"""File type detection by content (magic bytes), never by extension.
+
+Only the first bytes are read here. A ZIP container is reported as ``zip``; which OOXML type it is
+(DOCX/XLSX/PPTX, macro-enabled or not) needs its central directory, which is parsed in the sandbox
+(ADR-S20) and classified by ``container_kind``.
+"""
 
 from __future__ import annotations
 
-import zipfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,16 +25,9 @@ class Detected:
 _OLE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 
-def _zip_kind(path: Path) -> Detected:
-    try:
-        with zipfile.ZipFile(path) as zf:
-            names = set(zf.namelist()[:5000])
-    except zipfile.BadZipFile as e:
-        raise ArchRenderError(
-            ErrorCode.INGEST_UNSUPPORTED_TYPE,
-            "Corrupt ZIP container.",
-            "Re-export or re-zip the file.",
-        ) from e
+def container_kind(entry_names: Iterable[str]) -> Detected:
+    """OOXML type of a ZIP container from its entry names (listed in the sandbox)."""
+    names = set(entry_names)
     if "[Content_Types].xml" in names:
         if any(n.startswith("word/") for n in names):
             if "word/vbaProject.bin" in names:
@@ -79,7 +77,7 @@ def detect(path: Path) -> Detected:
     ):
         return Detected("heic", "image/heic")
     if head[:2] == b"PK":
-        return _zip_kind(path)
+        return Detected("zip", "application/zip")  # refined by container_kind (sandboxed)
     if head[:4] == b"AC10" or head[:6] in (b"AC1.40", b"AC1.50", b"AC2.10"):
         return Detected("dwg", "image/vnd.dwg")
     if head.startswith(b"ISO-10303-21"):

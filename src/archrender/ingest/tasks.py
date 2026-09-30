@@ -678,9 +678,12 @@ def task_xlsx(req: dict[str, Any]) -> Reply:
     import openpyxl
 
     src, out = Path(req["path"]), Path(req["out"])
+    # a file object: openpyxl rejects paths without an Excel extension (uploads are staged as .bin);
+    # it stays open for the read-only workbook until the task process exits
+    fh = src.open("rb")
     try:
         wb = openpyxl.load_workbook(
-            src, read_only=True, data_only=True, keep_vba=False, keep_links=False
+            fh, read_only=True, data_only=True, keep_vba=False, keep_links=False
         )
     except (zipfile.BadZipFile, KeyError, ValueError, OSError) as e:
         raise ArchRenderError(
@@ -854,6 +857,22 @@ def task_unzip(req: dict[str, Any]) -> Reply:
     return reply
 
 
+def task_zip_names(req: dict[str, Any]) -> Reply:
+    """Entry names of a ZIP container (for OOXML type detection), without extracting anything."""
+    try:
+        with zipfile.ZipFile(Path(req["path"])) as zf:
+            names = zf.namelist()[: int(req["max_entries"])]
+    except zipfile.BadZipFile as e:
+        raise ArchRenderError(
+            ErrorCode.INGEST_CORRUPT,
+            f"Corrupt ZIP container ({e}).",
+            "Re-export or re-zip the file.",
+        ) from e
+    reply = _empty_reply()
+    reply["meta"] = {"names": names}
+    return reply
+
+
 TASKS: dict[str, Callable[[dict[str, Any]], Reply]] = {
     "pdf": task_pdf,
     "image": task_image,
@@ -862,6 +881,7 @@ TASKS: dict[str, Callable[[dict[str, Any]], Reply]] = {
     "xlsx": task_xlsx,
     "pptx": task_pptx,
     "unzip": task_unzip,
+    "zip_names": task_zip_names,
 }
 
 
