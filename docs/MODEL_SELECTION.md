@@ -94,7 +94,7 @@ Jurisdictions default to the conservative placeholder in ADR-S10 until the owner
 | Candidate | License (evidence) | Boxes | Languages | Size | Runtime | Quality | Verdict |
 |---|---|---|---|---|---|---|---|
 | `PaddlePaddle/PaddleOCR-VL-1.6` + `PaddlePaddle/PP-DocLayoutV3_safetensors` | Apache-2.0 (PaddleOCR LICENSE read; card *(snippet)*) | Layout polygons + reading order; `Spotting:` line quads | 109 incl. Arabic, Cyrillic | 0.9B, ~2 GB | vLLM ≥ 0.11.1 **or** transformers backend (PaddleOCR ≥ 3.5); PP-DocLayoutV3 in `transformers` | OmniDocBench v1.6 96.33 (self-reported, PaddleOCR README) | **Primary** (Paddle-free transformers path; if the Paddle pipeline is ever needed, it gets its own venv with cu126 wheels) |
-| `zai-org/GLM-OCR` | MIT (README "released under the MIT License") | Region boxes via PP-DocLayoutV3 | zh, en, fr, es, ru, de, ja, ko (no Arabic; Turkish not listed) | 0.9B | vLLM ≥ 0.19 | OmniDocBench v1.5 94.62 | **Fallback** (set `maas.enabled=false`: the SDK defaults to a cloud API) |
+| `zai-org/GLM-OCR` | MIT (README "released under the MIT License") | Region boxes via PP-DocLayoutV3 | zh, en, fr, es, ru, de, ja, ko (no Arabic; Turkish not listed) | 0.9B | vLLM ≥ 0.19 | OmniDocBench v1.5 94.62 | **Fallback for English documents only** (no Turkish; set `maas.enabled=false`: the SDK defaults to a cloud API) |
 | RapidOCR (PP-OCRv5/v6 ONNX) + Docling (MIT) with `docling-project/docling-layout-heron` (Apache-2.0) | Apache/MIT (READMEs, PyPI) | Line-level det+rec boxes; Heron layout boxes | v6: 50 langs; v5 has Arabic rec | Tiny, CPU-capable | ONNX Runtime | v6-medium +5.1% rec over v5-server (README) | **Deterministic fallback + cheap box source** |
 | MinerU | "MinerU Open Source License": > 100M MAU / > $20M monthly revenue → separate license; attribution (LICENSE.md read) | — | — | — | — | — | **Blocked** |
 | Marker / Surya / Chandra | Weights "AI PUBS OPEN RAIL-M (MODIFIED)": forbidden above $5M revenue/funding (MODEL_LICENSE read) | — | — | — | — | — | **Blocked** |
@@ -111,6 +111,9 @@ Jurisdictions default to the conservative placeholder in ADR-S10 until the owner
     line boxes are the deterministic cross-check. Where the two disagree on a dimension string, a
     conflict is raised.
 - Office documents go through Docling.
+- **Turkish (owner answer Q-2):** PaddleOCR-VL-1.6 is primary. The Turkish fallback is RapidOCR
+  PP-OCRv5/v6 Latin recognition, since GLM-OCR does not list Turkish. Phase 2 acceptance requires
+  ç ğ ı İ ö ş ü to be read correctly on synthetic Turkish sheets (≥ 0.98 character accuracy).
 - None of the VLM OCRs yield reliable word boxes. Dimension strings are short line items, so line
   quads suffice, and the tile mapper splits lines into words by glyph gaps when needed.
 - Mock: returns the synthetic generator's ground-truth text with boxes.
@@ -119,14 +122,14 @@ Jurisdictions default to the conservative placeholder in ADR-S10 until the owner
 
 | Candidate | License (evidence) | Gated | Size | Runtime | Quality | Verdict |
 |---|---|---|---|---|---|---|
-| `facebook/sam3` (and `facebook/sam3.1`) | **SAM License** (2025-11-19, LICENSE read). Worldwide, royalty-free, no NC/cap/territory clause. **Conditions:** trade-controls/ITAR/military exclusions; indemnity to Meta; Meta may modify terms "effective immediately"; **no express patent grant** in the sam3 copy | **Yes** (request access on HF) | 848M | transformers `sam3` (5.17) or the official repo | SA-Co/Gold cgF1 54.1 vs OWLv2 24.6; LVIS AP 48.5 (README) | **Primary, `conditional`**: enabled only if the owner accepts `sam-license-2025-11-19` |
+| `facebook/sam3` (and `facebook/sam3.1`) | **SAM License** (2025-11-19, LICENSE read). Worldwide, royalty-free, no NC/cap/territory clause. **Conditions:** trade-controls/ITAR/military exclusions; indemnity to Meta; Meta may modify terms "effective immediately"; **no express patent grant** in the sam3 copy | **Yes** (request access on HF) | 848M | transformers `sam3` (5.17) or the official repo | SA-Co/Gold cgF1 54.1 vs OWLv2 24.6; LVIS AP 48.5 (README) | **Primary, `conditional`**: terms **accepted by the owner** (Q-3, 2026-09-30) → enabled |
 | `facebook/sam2.1-hiera-large` + `IDEA-Research/grounding-dino-base` | SAM 2: "checkpoints … licensed under Apache 2.0" (README); Grounding DINO Apache-2.0 (LICENSE) | No | 224M + ~0.2B | transformers `sam2`, `grounding_dino` | — | **Fallback** (fully permissive; Grounding DINO training data mix is a grey area, noted) |
 | `microsoft/Florence-2-large` | MIT per HF card *(snippet)* | No | 0.77B | transformers | — | Alternative grounder |
 | Ultralytics (YOLO-seg/YOLOE/SAM wrappers), YOLO-World | AGPL-3.0 / GPL-3.0 | — | — | — | — | **Blocked** |
 | SegFormer NVIDIA weights; ADE20K/Cityscapes-trained heads | NVIDIA NC license; dataset NC terms | — | — | — | — | **Blocked** |
 
-**Decision.** SAM 3 is primary once its terms are accepted, with a pinned LICENSE snapshot per
-download. Until then (and as the fallback), use Grounding DINO + SAM 2.1. QA thresholds are
+**Decision.** SAM 3 is primary (terms accepted by the owner on 2026-09-30), with a pinned LICENSE
+snapshot per download. Until then (and as the fallback), use Grounding DINO + SAM 2.1. QA thresholds are
 relative to the base render (ADR-S06), so they remain valid when the fallback is active. Clients
 must be screened against sanctions lists before SAM 3 is used on their data.
 
@@ -165,10 +168,11 @@ on non-commercial or research-only data:
      (Apache-2.0 weights) or ConvNeXt (MIT). Symbol detection (door arcs, windows) with RT-DETR
      (Apache-2.0).
    - Training data:
-     - Default: our **synthetic plan generator** + the **firm's CAD archive** rasterised with labels
-       from DXF layers. Confirm client contracts allow internal ML use (open question Q-5).
-     - Optional `conditional` data: ResPlan (CC BY 4.0 data, MIT code; scraped-listing provenance)
-       and Modified Swiss Dwellings (CC BY 4.0 *(snippet)*). Used only if the owner accepts.
+     - **Synthetic plan generator only** (owner answer Q-4, 2026-09-30: no firm archive, no
+       third-party datasets). It emits Turkish drawing conventions (layer names, labels, decimal
+       commas, hatch styles) as well as generic/English ones.
+     - Not used unless the owner changes Q-4: the firm's CAD archive; ResPlan (CC BY 4.0) and
+       Modified Swiss Dwellings (CC BY 4.0 *(snippet)*).
    - The training script runs on the pod. The weights are the firm's own and are registered as
      `license: proprietary-firm`, `commercial_ok: true`.
 3. **Forbidden:** any checkpoint trained on the datasets above; Ultralytics; YOLO-World; SegFormer

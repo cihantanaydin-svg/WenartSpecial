@@ -127,16 +127,26 @@ structural objects ∪ projected 3D architectural edges (from the compiled geome
 matrices) with depth-test occlusion.
 **Consequences.** Exact, fast, deterministic, and unit-testable (reprojection within 1 px).
 
-## ADR-S10: Default jurisdiction set until the owner specifies countries
-**Context.** Fill-in §0 "countries" is blank, and licenses have territorial clauses (e.g. Hunyuan
-excludes EU/UK/South Korea).
-**Decision.** `configs/deployment.yaml: jurisdictions: [EU, UK, US, CH, TR, KR]` as a conservative
-placeholder, and **any** territorial exclusion, MAU/revenue cap or non-commercial clause disables the
-entry regardless of the list, until the owner confirms. Data residency: EU datacenters preferred in
-the placeholder.
-**Consequences.** Some models are disabled that might be legal for the firm. Revisited after answer
-Q-1 in PLAN.md. Meta-licensed models (SAM 3) additionally require that clients are not targets of
-trade controls; the firm screens clients before enabling them.
+## ADR-S10: Jurisdiction = Türkiye; EU datacenters closest to Türkiye (owner answer Q-1)
+**Context.** Owner answer (2026-09-30): the firm and its clients operate in **Türkiye**. Licenses
+have territorial clauses. For example, the Tencent licences exclude EU/UK/South Korea: Türkiye is
+not excluded, but the MAU caps still block them. RunPod has no datacenter in Türkiye.
+**Decision.**
+- `configs/deployment.yaml: jurisdictions: [TR]`.
+- The strict rule stays: **any** territorial exclusion, MAU/revenue cap or non-commercial clause
+  disables an entry, whatever the jurisdiction list says.
+- Datacenter preference: network-volume-capable EU/EEA DCs nearest to Türkiye, in order: `EU-RO-1`
+  (Romania), `EU-CZ-1` (Czechia), then the others returned live by the catalog (EUR-NO-1, EUR-IS-*…).
+  This order is overridable in `.env`.
+- Meta-licensed models (SAM 3, accepted per Q-3) require that clients are not targets of trade
+  controls, so the firm screens clients.
+**Consequences.**
+- Client documents leave Türkiye for an EU datacenter. Under **KVKK (Law No. 6698), Art. 9**,
+  cross-border transfers of personal data need a legal basis/safeguards (e.g. standard contracts
+  notified to the KVKK Authority). This is a **legal action item for the firm**, not something code
+  can satisfy.
+- The system minimises personal data: EXIF GPS and owner metadata are stripped at intake, and
+  purge/retention endpoints exist. DEPLOY.md records the item.
 
 ## ADR-S11: PDF handling without AGPL
 **Decision.** pypdfium2 (Apache-2.0 / BSD-3; PDFium BSD-3) for vector paths, text objects and

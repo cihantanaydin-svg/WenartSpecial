@@ -7,8 +7,8 @@
    `docs/MODEL_SELECTION.md` (model ADRs with license evidence), `docs/RISKS.md`.
 
 ## Current state
-Phase 0 (research + design docs) is complete and **awaiting approval**. No code yet. Do not start
-Phase 1 until the owner approves the Phase 0 docs.
+Phase 0 approved 2026-09-30 (owner answers in docs/PLAN.md: Türkiye, Turkish, SAM licence accepted,
+no archive/datasets for training, no ODA, gpu80). Phase 1 (walking skeleton) in progress.
 
 ## Conventions (apply from Phase 1)
 - Python 3.11+, `uv` with a committed `uv.lock`; package `archrender` under `src/archrender/`.

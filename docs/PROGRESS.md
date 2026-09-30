@@ -2,8 +2,8 @@
 
 | Phase | Status | How verified | UNVERIFIED-ON-GPU | Next |
 |---|---|---|---|---|
-| 0 Research & design | **Done, awaiting owner approval** | Five parallel research passes (models ×3, RunPod, Blender/stack/licences). Evidence from LICENSE files on GitHub, RunPod's docs/OpenAPI source repo, diffusers source + wheels, the vLLM recipes repo, PyPI and Docker Hub metadata, and web-search snippets of HF cards (marked). | Everything GPU-related: VRAM/time budgets in PLAN.md are estimates | Owner approval + answers to Q-1…Q-8 (PLAN.md), then Phase 1 walking skeleton |
-| 1 Walking skeleton | Not started | — | — | — |
+| 0 Research & design | **Done, approved by owner 2026-09-30** (answers recorded in PLAN.md) | Five parallel research passes (models ×3, RunPod, Blender/stack/licences). Evidence from LICENSE files on GitHub, RunPod's docs/OpenAPI source repo, diffusers source + wheels, the vLLM recipes repo, PyPI and Docker Hub metadata, and web-search snippets of HF cards (marked). | Everything GPU-related: VRAM/time budgets in PLAN.md are estimates | Phase 1 walking skeleton |
+| 1 Walking skeleton | In progress | — | — | — |
 | 2 Ingest & understanding | Not started | — | — | — |
 | 3 Plan extraction + Gate A | Not started | — | — | — |
 | 4 Scene, cameras, base render | Not started | — | — | — |

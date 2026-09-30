@@ -199,7 +199,9 @@ class Room(BaseModel):
 ```
 
 `PlanVersion` is immutable once approved at Gate A. Edits create a new draft version with a JSON
-Patch from its parent, and every edit is stored as `TrainingExample(before, after, source image)`
+Patch from its parent, and every edit is stored as `TrainingExample(before, after, source image,
+training_use_allowed=false)` (owner answer Q-4: client documents are not used for training unless
+the owner explicitly changes this setting)
 for future plan-recognition training.
 
 ### 4.3 Section, DesignBrief, Scene

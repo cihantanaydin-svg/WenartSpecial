@@ -196,11 +196,14 @@ Acceptance: `deploy.py up --dry-run` verified; smoke test ready (and run on a po
 provided); license audit clean; every Definition-of-Done box ticked or its deviation documented.
 
 ## Golden projects (made from scratch, no copyrighted plans)
-1. **G1 "Flat"**: 2-bedroom apartment, Manhattan walls. Inputs: CAD-style vector PDF (1:50) + DXF +
-   finish schedule XLSX + text brief + 4 mood-board images (CC0 or generated from our own renders).
+1. **G1 "Daire" (flat)**: 3+1 apartment, Manhattan walls. **Turkish** labels (Salon, Mutfak, Yatak
+   Odası, Banyo, Antre, Balkon), decimal-comma dimensions, `Ölçek 1/50` title block. Inputs:
+   CAD-style vector PDF + DXF (layers DUVAR/KAPI/PENCERE) + finish schedule XLSX (Malzeme Listesi) +
+   Turkish text brief + 4 mood-board images (CC0 or generated from our own renders).
 2. **G2 "Loft"**: open plan with a non-Manhattan wall, an arc wall, a double-height living area
    (flagged), and a kitchen island. Inputs: raster scan (300 DPI with noise + stamps) + phone photo of
-   the printed plan + RCP + door/window schedule PDF + DOCX brief in English + second language.
+   the printed plan + RCP (Tavan Planı) + door/window schedule PDF (Doğrama Listesi) + DOCX brief in
+   Turkish and English.
 3. **G3 "Office"**: small office suite, imperial units (feet-inches dimensions), IFC export + furniture
    plan, site photo for window backplates.
 
@@ -209,8 +212,20 @@ Columns: profile · plan (wall F1, opening F1, scale err) per source type · ren
 retries, fallbacks) · fault injection (detection %, false-alarm %, per-type) · timings per stage ·
 VRAM peaks. CI runs the CPU subset; the pod smoke test runs the GPU subset.
 
-## Open questions for the owner (defaults apply if unanswered)
-Answer these when approving. Each has a default that applies if unanswered.
+## Owner answers (2026-09-30), Phase 0 **approved**
+
+| # | Answer | Effect |
+|---|---|---|
+| Q-1 | Türkiye | `jurisdictions: [TR]`. DCs: EU-RO-1 → EU-CZ-1 → other EU/EEA (ADR-S10). KVKK cross-border note for the firm |
+| Q-2 | Turkish | Turkish in OCR acceptance tests, dimension parsing (decimal comma, `Ölçek 1/50`), room-type and CAD layer dictionaries (DUVAR, KAPI, PENCERE…), and Turkish-aware case folding (I/ı/İ/i). GLM-OCR fallback limited to English documents |
+| Q-3 | Yes | `accepted_license_terms: [sam-license-2025-11-19]`, so SAM 3 is primary |
+| Q-4 | No | Plan recognition trains on **synthetic data only**. Gate A corrections are stored with `training_use_allowed=false` and never enter training unless the owner changes this |
+| Q-5 | No | LibreDWG for DWG |
+| Q-6 | Yes (budget can be higher) | gpu80 default; gpu96plus available by config; idle watchdog off by default (one env var to enable) |
+| Q-7 | No | Synthetic golden projects only, with Turkish drawing conventions |
+| Q-8 | Approved | Credentials requested in Phase 8 |
+
+## Open questions as asked (kept for the record)
 
 | # | Question | Why it matters | Default if unanswered |
 |---|---|---|---|
