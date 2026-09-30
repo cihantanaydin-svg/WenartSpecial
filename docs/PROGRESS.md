@@ -4,7 +4,7 @@
 |---|---|---|---|---|
 | 0 Research & design | **Done, approved by owner 2026-09-30** (answers recorded in PLAN.md) | Five parallel research passes (models ×3, RunPod, Blender/stack/licences). Evidence from LICENSE files on GitHub, RunPod's docs/OpenAPI source repo, diffusers source + wheels, the vLLM recipes repo, PyPI and Docker Hub metadata, and web-search snippets of HF cards (marked). | Everything GPU-related: VRAM/time budgets in PLAN.md are estimates | Phase 1 walking skeleton |
 | 1 Walking skeleton | **Done 2026-09-30** | `make lint typecheck test e2e eval`, strict mode (no skips); CPU image built, booted and smoke-tested; deploy payloads validated against RunPod's OpenAPI v2 schemas; workflows pass actionlint. Details below | OptiX/CUDA device selection, GPU image build (CUDA base + Blender tarball + torch cu130), vLLM, live RunPod API. List below | Phase 2 ingest & understanding |
-| 2 Ingest & understanding | Not started | — | — | — |
+| 2 Ingest & understanding | **Done 2026-09-30 (CPU part)** | strict `make test e2e eval` (274 tests), golden projects G1/G2 through the pipeline, mutation fuzzing of intake, CPU image rebuilt and smoke-tested with S1 inside. Details below | VLM classification + combiner, PaddleOCR-VL, the ≥ 0.95 F1 / ≥ 0.98 OCR acceptance runs, VLM A/B, vLLM serving/sleep. List below | Phase 3 plan extraction + Gate A |
 | 3 Plan extraction + Gate A | Not started | — | — | — |
 | 4 Scene, cameras, base render | Not started | — | — | — |
 | 5 Brief, assets, layout + Gates B/C | Not started | — | — | — |
@@ -94,3 +94,86 @@ and the UI, plus the deploy skeleton.
 - Sun position from pvlib (fixed SW sun is an assumption today): Phase 4.
 - `bootstrap_on_pytorch_template.sh` fallback and the idle watchdog: Phase 8.
 - UI for Gate B edits (the API and CLI accept material overrides now): Phase 5.
+
+## Phase 2: ingest & understanding, S0/S1 (done 2026-09-30, CPU part)
+
+Every upload is detected by magic bytes and parsed in a resource-limited child process (ADR-S20)
+before it enters the store. S1 then analyses every page in a cached stage (UNDERSTAND job, queued
+after each intake):
+- words from the PDF text layer, DXF text entities or tiled Turkish/English OCR;
+- title block and scale, north arrow, door/window/room tags (text layer, and bubbles on scans);
+- page class with a confidence;
+- schedules (XLSX/DOCX tables, PDF and scanned tables), linked to the tags on plan pages.
+
+Low-confidence or unfamiliar pages, unlinked schedule rows and incomplete OCR go to the review
+queue. The UI's Pages panel follows the analysis job and shows each page's class, confidence, scale,
+north angle and tag count, with a menu to correct the class. The CLI has `pages`, `schedules` and
+`review`.
+
+### Acceptance (docs/PLAN.md, Phase 2)
+| item | result |
+|---|---|
+| Fuzz/limit tests: zip bomb, path traversal, symlink, oversized image, malformed PDF rejected with coded errors | **met.** Targeted cases in `test_intake.py`; mutation fuzzing in `test_intake_fuzz.py` (8 formats × 6 truncated/bit-flipped/spliced files in CI). A one-off run of 320 mutants: all ingested or rejected with an `INGEST_*` code and a fix hint, 0 crashes |
+| Classification ≥ 0.95 macro-F1 (with the real VLM) | heuristic model alone on a held-out synthetic set (88 pages): macro-F1 **1.000**. This set is synthetic, drawn from the same generator as training, so it says little about real documents; those go to review when unfamiliar (below). With the VLM: **UNVERIFIED-ON-GPU** |
+| Low-confidence items land in the review queue | **met** (`test_s1_pipeline.py`, `test_classify.py`); held-out review rate 4.5 %, 0 misclassified pages outside review |
+| OCR: dimension strings ≥ 0.98 exact at 300 DPI (GPU run) | not met by the CPU fallback: Tesseract reads ≥ 0.95 on a clean 300-DPI scan (test) and 75 % over mixed scans (200/300 DPI, clean to noisy). PaddleOCR-VL run: **UNVERIFIED-ON-GPU** |
+| Schedules linked to plan tags on all golden projects | **met**: G1 18/18 rows, G2 11/11 rows (tags read inside bubbles on a noisy 300-DPI scan); every G1/G2 page gets its expected class (`test_golden_s1.py`, `make eval`) |
+| VLM A/B (Qwen3.6 vs Qwen3.8) | **UNVERIFIED-ON-GPU**: client, prompt, JSON schema and combiner exist and are tested against a fake OpenAI server; the A/B needs the pod |
+
+### How it was verified
+| Check | Result |
+|---|---|
+| `make lint typecheck`, no-stubs check, schema / deploy-manifest / licence freshness | clean |
+| `pytest` with `ARCHRENDER_TEST_STRICT=1` (Tesseract tur+eng, libheif, LibreDWG and Blender must be present) | **274 passed**, incl. e2e (API, CLI, Playwright UI with the Pages panel) |
+| Golden projects through upload → intake → S1 | G1 "Daire" (vector PDF plan, the same plan as DXF in cm, XLSX finish schedule, door/window schedule PDF, DOCX brief, mood board, 2 photos) and G2 "Loft" (noisy scanned plan, ceiling plan, schedule PDF, TR/EN brief): all classes right, all schedule rows linked |
+| Container | CPU image rebuilt; `make docker-smoke` now also uploads a raster sheet and waits for S1 in the container (OCR + classifier): **passed** |
+| Uploads without an extension | every format ingests from a `<upload>.bin` staging path (found: every uploaded XLSX had failed; fixed) |
+
+### `make eval` S1 section (held-out synthetic corpus, seed 3, 8 per class = 88 pages)
+| metric | value |
+|---|---|
+| sources | 43 vector PDF · 37 scans (200/300 DPI, clean/medium/noisy) · 8 photos |
+| page classification (heuristic model, Tesseract text) | macro-F1 1.000 · review rate 4.5 % (2 pages outside the training range) · errors not sent to review 0 |
+| title-block fields (vector + scans) | 325/344 (94 %) |
+| scale from title block | 48/48 |
+| north arrow (vector) | 12 measured, 0 missing, mean \|err\| 0.51°, max 0.65° |
+| OCR on scans (Tesseract 5.3.4) | dimension strings 15/20 (75 %) · title-block text 318/332 (96 %) · room names 53/67 exact (79 %), Turkish character accuracy 0.82 |
+| bubble tags on scans | 31/37 (84 %) over all scans, 0 false. Per quality on 6 plans: 75/77 (97 %) at 300 DPI clean, medium and noisy; 68, 66 and 47 of 77 at 200 DPI |
+| schedule ↔ plan tags | 100/100 rows on 8 synthetic projects; golden G1 18/18, G2 11/11 |
+| timings | Tesseract ~12–15 s per A3 page at 300 DPI (both reading directions) on this 4-core container; golden G1 20 s, G2 42 s (S0 + S1) |
+
+`make eval` uses 3 pages per class by default (33 pages) to keep CI time down; the table above is
+`evaluate(seed=3, per_class=8)`.
+
+### UNVERIFIED-ON-GPU after Phase 2
+- VLM page classification (Qwen3.6-27B-FP8 via vLLM, `models/impls/vllm_vlm.py`): request/response
+  schema, probe, sleep/wake and the geometric-mean combiner are tested against a fake server only.
+  A combiner calibrated on VLM answers for real pages is not built.
+- vLLM serving on the pod: `deploy/vllm/requirements.lock` (vLLM 0.30.0, torch 2.13, CUDA 13) is
+  licence-pre-audited from PyPI metadata; the supervisor starts vLLM only when the weights are
+  installed. Not run.
+- PaddleOCR-VL-1.6 (primary OCR) is not implemented; the role falls back to Tesseract with a
+  recorded degradation.
+- The acceptance numbers that need the GPU: classification ≥ 0.95 macro-F1 with the VLM, OCR
+  ≥ 0.98 on dimension strings, the Qwen3.6 vs Qwen3.8 A/B.
+- Model pins: `configs/models.lock.yaml` still needs `python -m archrender.ops.models pin` on a
+  machine with Hub access (huggingface.co is blocked here).
+
+### Deviations from the Phase-2 plan (recorded, not hidden)
+- RapidOCR → **Tesseract 5** as the CPU OCR (ModelScope/HF unreachable here; DECISIONS.md).
+- Docling → python-docx/openpyxl/python-pptx for Office files (ADR-S21).
+- Classifier confidence: temperature bounded at T ≥ 1, and pages outside the training range go to
+  review (the synthetic calibration set is separable; DECISIONS.md, Phase-2 amendments).
+- G2's non-Manhattan/arc walls, the phone photo of a printed plan, and G3 (IFC office) come with the
+  Phase-3 plan generator and extractors.
+
+### Found and fixed on the way
+- Tesseract's sparse-text mode spent > 120 s on the speckle of one noisy scan tile: noisy tiles
+  (σ > 3 grey levels) are now despeckled, calls time out after 120 s, and an unreadable tile is
+  reported on the page and in the review queue instead of failing it.
+- Bubble tags on noisy scans: 0/77 → 75/77 at 300 DPI (local ink threshold, both ring boundaries,
+  lettering isolated from door swings, voting with a digit look-alike fallback).
+- ZIP/OOXML type detection read the ZIP directory in the worker; it now runs in the sandbox (found
+  by the fuzz test).
+- Uploaded workbooks always failed (openpyxl requires an `.xlsx` filename; uploads are staged as
+  `.bin`).

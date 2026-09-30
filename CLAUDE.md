@@ -10,7 +10,8 @@
 Phase 0 approved 2026-09-30 (owner answers in docs/PLAN.md: Türkiye, Turkish, SAM licence accepted,
 no archive/datasets for training, no ODA, gpu80). Phase 1 (walking skeleton) done 2026-09-30; see
 PROGRESS.md for what is verified, the UNVERIFIED-ON-GPU list, deviations and deferred items.
-Next: Phase 2 (ingest & understanding).
+Phase 2 (ingest & understanding, S0/S1) done on CPU 2026-09-30: see PROGRESS.md for the measured
+numbers, the UNVERIFIED-ON-GPU list and deviations. Next: Phase 3 (plan extraction + Gate A).
 
 ## Commands
 - `make setup` (uv sync) · `make setup-blender` (official bpy 5.2.2 wheel, hash-locked, into
@@ -28,6 +29,13 @@ Next: Phase 2 (ingest & understanding).
   profile/model changes (CI checks it).
 - Releases: push a `v*` tag → `.github/workflows/release.yml` builds, smoke-tests, audits and
   publishes the GPU image to GHCR; the digest is in the release notes and `image.lock.json`.
+- `python -m archrender.synth.corpus OUT --per-class N` writes a labelled synthetic corpus;
+  `make train-classifier` retrains `configs/classifier/page_classifier_v1.json` (~20 min, OCR);
+  `python -m archrender.understand.evaluate` runs the held-out S1 evaluation (also in `make eval`).
+- `python -m archrender.ops.license_audit --lock deploy/vllm/requirements.lock` pre-audits the vLLM
+  environment from PyPI metadata (CI does this); the release audits it again inside the image.
+- System tools used in tests (Tesseract tur+eng, libheif, LibreDWG): CI installs them (LibreDWG
+  via `deploy/libredwg/build.sh`, cached); strict mode fails if one is missing.
 
 ## Conventions (apply from Phase 1)
 - Python 3.12 (`>=3.12,<3.14`), `uv` with a committed `uv.lock`; package `archrender` under
@@ -51,6 +59,20 @@ Next: Phase 2 (ingest & understanding).
   never `REPO_ROOT`, in code that runs in the container.
 - Run-level user choices (e.g. `RunConfig.materials`) are applied *after* the cached stage they edit,
   so they invalidate only downstream stages.
+- Untrusted input is parsed only through `ingest.sandbox.run_task`/`run_tool` (resource-limited
+  child process, ADR-S20). A new external tool also needs: licences.yaml `subprocess_tools`,
+  the Dockerfile, CI, and a strict-mode test (`tests.conftest.require_tool`).
+- Changing an enum or schema that is exported (e.g. `ErrorCode`, `JobKind`) → run `make schemas`;
+  CI checks freshness. Changing models/profiles → `python -m archrender.ops.deploy_manifest`.
+- Model roles resolve through `ModelManager.get_with_fallback(role, stage)`: profile model →
+  fallbacks → the role's mock, each step recorded as a degradation (never silent). Readiness only
+  checks `ops.readiness.PIPELINE_ROLES`; add a role there when a stage starts using it.
+- Classifier features are versioned by `understand.features.FEATURE_NAMES`; changing them requires
+  retraining (loading refuses a mismatched model). So does changing what feeds them (OCR
+  preprocessing, text/visual extraction): retrain and commit the new JSON with the change.
+- Golden projects (`synth.golden`: G1 vector PDF + DXF + XLSX, G2 noisy scan) are the Phase-2
+  acceptance (`tests/integration/test_golden_s1.py`). Evaluate OCR/CV changes on scans of several
+  seeds and qualities (clean/medium/noisy, 200 and 300 DPI), not on one page.
 
 ## Environment notes (this cloud dev container)
 - No GPU. A Docker daemon can be started (`nohup dockerd >/tmp/dockerd.log 2>&1 &`); Docker Hub and

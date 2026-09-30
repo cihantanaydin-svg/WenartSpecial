@@ -273,3 +273,71 @@ hallucinated.
 PlanGraph is still backed by measured evidence or a human decision. Suggestion accept/reject
 decisions become training data. The eval reports assist rate, acceptance rate and precision of
 accepted assists against the synthetic ground truth.
+
+## ADR-S20: Untrusted parsers run in a resource-limited child process (Phase 2)
+**Context.** Uploads are adversarial by default: zip bombs, malformed PDFs that crash PDFium,
+decompression bombs in images, pathological DXF. The worker also runs heartbeat threads, so
+`preexec_fn` resource limits are unsafe.
+**Decision.** Every parser of uploaded content (pypdfium2, Pillow, ezdxf, python-docx, openpyxl,
+python-pptx, zipfile) and every external tool (LibreDWG `dwg2dxf`, libheif) runs in a fresh process
+launched through `archrender.ingest.limits`, which sets RLIMIT_AS/CPU/FSIZE/NOFILE/CORE and then
+`exec`s the target. Requests and replies are JSON on stdin/stdout; limits, timeouts, crashes and
+parser exceptions become coded errors (`INGEST_LIMIT_EXCEEDED`, `INGEST_CORRUPT`, …) with fix hints.
+A file enters the project store only after it parses. Type detection in the worker reads magic
+bytes only; the directory of a ZIP container (to tell DOCX/XLSX/PPTX from an archive) is listed in
+the sandbox too (found by the intake fuzz test: a corrupted DOCX raised inside the worker).
+**Consequences.** ~100 ms process start-up per file; a hostile file cannot exhaust the worker or
+the host. No network namespace isolation (not available in the pod); the parsers make no network
+calls.
+
+## ADR-S21: Office files through python-docx/openpyxl/python-pptx, not Docling (Phase 2)
+**Context.** ADR-M03 routed Office documents through Docling. For DOCX/XLSX/PPTX, Docling's own
+backends are these same libraries; the rest of Docling (layout models, torch) adds weight and model
+downloads without improving OOXML parsing.
+**Decision.** Parse OOXML directly (paragraphs, tables, sheets, slides, embedded images). Macros are
+never executed: `.xlsm` is read as data with the VBA project ignored; `.docm`/`.pptm` are rejected
+with a hint to save plain files. openpyxl uses defusedxml (XML bomb protection).
+**Consequences.** Smaller image, no model downloads for Office files. Docling stays out of the
+dependency set (it can return for PDF layout if PP-DocLayoutV3 disappoints; it would then be an
+explicit ADR change).
+
+## Phase-2 amendments to earlier ADRs
+- **ADR-M03 (OCR): Tesseract 5 replaces RapidOCR as the CPU fallback.** RapidOCR's ONNX models are
+  hosted on ModelScope/Hugging Face, which this build environment cannot reach, so it could not be
+  verified here. Tesseract 5.3.4 (Apache-2.0) with the `tur` and `eng` LSTM data (Apache-2.0,
+  Ubuntu packages) runs everywhere, handles Turkish (ç ğ ı İ ö ş ü), and is measured in CI.
+  Door/window tags inside bubbles are read with a dedicated single-line pass. PaddleOCR-VL-1.6
+  stays the primary (GPU, not yet implemented: the role falls back to Tesseract with a recorded
+  degradation). Tiles are despeckled (3×3 median) before Tesseract's sparse-text mode, which
+  otherwise spent minutes on the paper noise of a single 200-DPI scan tile (measured: > 120 s vs
+  0.4 s; accuracy unchanged on the synthetic benchmark). Each call has a 120 s timeout; a tile that
+  still fails is recorded on the page and sent to review (`page_ocr`), and the other tiles are kept.
+- **Bubble tags on scans:** ink is thresholded against the local paper level (not a fixed grey),
+  both ring boundaries are ellipse candidates (a door swing touching the ring destroys the outer
+  one), and the lettering is isolated by connected components after an opening that detaches thin
+  swing/wall strokes. A tag counts only when ≥ 2 of 3 magnifications read it and none reads a
+  different tag; only if that fails are digit look-alikes after a door/window prefix repaired
+  (`PS` → `P5`) and the vote repeated. Measured on 6 plans per quality: 75/77 (97 %) at 300 DPI for
+  clean, medium and noisy scans; at 200 DPI 68, 66 and 47 of 77; 0 false tags throughout.
+- **Classifier temperature is bounded below by 1.** Temperature scaling on the (synthetic, nearly
+  separable) calibration corpus drove T to its lower limit (0.05), i.e. near-certain confidence on
+  every page and an empty review queue on real documents. T may soften the L2-regularised fit but
+  never sharpen it; the calibrated combiner trained on real pages (pod) replaces this.
+- **Pages outside the classifier's training range go to review.** The model stores each feature's
+  training range; features outside it (5 % tolerance) are clipped before scoring and the page is
+  flagged for review with the features named (a one-line DXF had come out as "moodboard, 100 %").
+  With the VLM serving, such a page leaves review only if the VLM confidently gives the same class.
+- **Uploads are staged without their extension** (`<upload id>.bin`); parsers must not depend on
+  the filename. openpyxl did (every uploaded workbook failed); workbooks are now opened from a file
+  object, and a test ingests every format from a staging path.
+- **ADR-S16 (DWG): LibreDWG 0.14 built from the pinned, checksum-verified source tarball**
+  (`deploy/libredwg/build.sh`, read-only build) because Ubuntu 24.04 has no LibreDWG package. Its
+  R2000 output writes handle 0 for some ENDBLK records; intake renumbers them and reports it.
+- **ADR-S17 (HEIC): Ubuntu 24.04's libheif 1.17 ships `heif-convert`** (`heif-dec` from 1.18);
+  intake uses whichever exists. Decoder plugin libde265 only.
+- **ADR-M01 (VLM) classification combiner:** until the calibrated combiner with VLM features is
+  trained on the pod (`archrender.understand.train`, UNVERIFIED-ON-GPU), heuristics and VLM are
+  combined by an equal-weight geometric mean; confident disagreement always goes to review.
+- **Readiness and fallbacks:** roles whose model (and fallbacks) have no runtime in the current
+  build run on their mock with a recorded degradation; `/readyz` lists them as degraded instead of
+  blocking. Readiness only considers the roles the implemented stages call.
