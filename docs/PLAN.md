@@ -6,7 +6,65 @@ Every phase ends with: tests + `make eval` run, `docs/PROGRESS.md` updated (done
 UNVERIFIED-ON-GPU / next), `CLAUDE.md` refreshed, and conventional commits pushed. The deploy
 skeleton (Dockerfile, entrypoint, `deploy.py --dry-run`) stays green from Phase 1 onward.
 
-<!-- BUDGETS -->
+## Budgets per hardware profile
+All numbers are **estimates from published measurements and model sizes, UNVERIFIED-ON-GPU**. The
+pod smoke test replaces them with measured peaks, and the profile YAMLs are updated accordingly.
+The GPU worker time-multiplexes model groups (ARCHITECTURE §5.3), so the budget is per *phase*,
+not the sum of all models.
+
+### VRAM (GB)
+
+| Phase (resident set) | gpu48 (L40S, RTX 6000 Ada, A6000) | gpu80 (H100, A100 80GB), **default** | gpu96plus (RTX PRO 6000 96, H100 NVL 94, H200 141, B200 180) |
+|---|---|---|---|
+| **Understand / judge** | VLM primary Qwen3.6-27B-FP8, 16k ctx (~34) + OCR-VL + layout (~3) + SigLIP 2 (~2) + DA3 (~2) + SAM 3 (~4) ≈ **45**. Judge-2 (Gemma-4-31B QAT, ~22) runs only after the primary sleeps | Primary, 32k ctx (~38) + small models (~11) ≈ **49**; + judge-2 QAT on demand (~22) ≈ **71** | Primary (~38) + judge-2 (QAT ~22 on 94/96 GB; FP8-dynamic ~38 on ≥ 141 GB) + small ≈ **71–87** |
+| **Render (Cycles 4K)** | VLMs asleep; Cycles ≤ **12** | ≤ **12** | ≤ **12** (co-resident with VLMs on ≥ 141 GB) |
+| **Refine** | Qwen-Image-Edit-2511 BF16 with block-level group offload (~20–26 peak, slow). The FP8 transformer (~20.5 + FP8 text encoder ~8.5 ≈ 35) is enabled **only after the Phase-6 A/B** | BF16 fully resident. Measured peak for the same 20B stack is 61 GiB at 1 MP (vLLM-Omni, H200) → budget **64**; HAT ~2; headroom ~14 | BF16 **64**. On ≥ 141 GB the VLM stays awake (no swap). NVFP4 on Blackwell only after an A/B |
+| Global refine resolution / tile | 1.0 MP / 1024 px | 1.6 MP (1664×928) / 1328 px | 1.6 MP / 1328 px |
+| Best-of-N (finals) | 2 | 3 | 4 |
+| System RAM (vLLM sleep level 1 + offloaded encoders) | ≥ 96 GB; vLLM sleep **level 2** (reload from disk) when group-offloading | ≥ 96 GB (`minRamPerGpu` 96) | ≥ 128 GB |
+| Notes | Ampere A6000: FP8 is weight-only (Marlin), so no speed-up | A100 runs Cycles via PTX JIT (cached) and FP8 VLM via Marlin | H100 NVL (94 GB) uses the 94 GB budget |
+
+`cpu_test`: every role mocked; Blender CPU at ≤ 320×180 and 16 spp; no GPU and no model downloads.
+
+### Disk (network volume, GB)
+
+| Item | gpu48 / gpu80 | gpu96plus |
+|---|---|---|
+| Qwen-Image-Edit-2511 (BF16 repo) + Lightning LoRA | 59 | 59 |
+| Qwen-Image-2512 + InstantX ControlNet-Union (text encoder/VAE deduped by SHA256 if identical) | 45–62 | 45–62 |
+| FLUX.2 [klein] 4B (fast fallback) | 16 | 16 |
+| Qwen3.6-27B-FP8 (primary VLM) | 31 | 31 |
+| Gemma-4-31B-it judge-2 (QAT W4A16 / FP8-dynamic) | 20 | 33 |
+| OCR (PaddleOCR-VL-1.6, PP-DocLayoutV3, GLM-OCR, RapidOCR, Docling Heron) | 6 | 6 |
+| Vision tools (SigLIP 2, SAM 3, SAM 2.1 + Grounding DINO, DA3 ×2, MoGe-2, HAT, Real-ESRGAN, LAION aesthetic + CLIP L/14, own plan segmenter) | 17 | 17 |
+| **Model subtotal** | **≈ 194–211** | **≈ 207–224** |
+| Optional challengers (Qwen3.8-27B-FP8 +31, FireRed-Image-Edit +41) | +72 | +72 |
+| CC0 asset seed (≈150 PBR materials, ≈200 furniture models, ≈30 HDRIs) | 25 | 25 |
+| Kernel/compile caches (CUDA, OptiX, torch, vLLM) | 15 | 15 |
+| DB replica + snapshots | 2 | 2 |
+| ×1.3 headroom on the above | ≈ 306–328 | ≈ 323–345 |
+| Project allowance (configurable; ≈ 2–5 GB per section run incl. EXR passes and bundles) | 200 | 200 |
+| **Network volume size** | **≈ 550** | **≈ 550** |
+
+- **Cost:** a STANDARD network volume is $0.07/GB/month below 1 TB (RunPod docs), so ~550 GB ≈
+  **$39/month**. HIGH_PERFORMANCE is priced at a premium (UNVERIFIED). GPU hourly prices are fetched
+  live by `deploy.py` from `/v2/catalog/gpus` and printed before creation.
+- **Container disk (template `disk`):** 100 GB (image ≈ 35–40 GB + scratch). 160 GB if hot staging
+  of the diffusion weights is enabled after measurement.
+- **Load time:** at the documented 200–400 MB/s, a 41 GB transformer loads in ≈ 100–200 s from a
+  STANDARD volume. This is why weights stay resident or in pinned CPU RAM between phases, and why
+  HIGH_PERFORMANCE volumes are preferred.
+
+### Time per section (3 views, 3840×2160, gpu80), estimate
+- Cycles 4K base, 3 views: ≈ 2–5 min each.
+- Refine global pass: ≈ 20–30 s per candidate at 30–40 steps with true-CFG (≈ 0.34 s/step without
+  CFG on H200).
+- Tiled 4K pass: 8 tiles, ≈ 1.5–2 min per candidate.
+- QA: ≈ 30–60 s per candidate.
+- Best-of-3 per view, plus retries.
+
+**≈ 25–45 min per section.** Measured in the smoke test, and reported by `make eval` per profile.
+
 
 ## Phases
 
@@ -26,8 +84,9 @@ via a minimal ezdxf path). SceneCompiler for a box room (manifold3d). Blender bu
 render at tiny resolution with passes. Mock refine (deterministic image op). QA metric framework with
 the relative-to-base metrics. Bundle + download. CLI and Python client. Minimal React UI (login,
 project, upload, run, SSE progress, gallery, download). Dockerfile + entrypoint + supervisor config.
-`download_models.py` (license-gated, SHA256, resumable) against a registry containing only
-mocks/tiny models. `deploy.py up --dry-run` / `down --dry-run`. License audit script v0. Litestream
+`download_models.py` (license-gated, SHA256, resumable, Hub-license cross-check) and
+`pin_models.py` (writes `models.lock.yaml` + LICENSE snapshots), exercised against a registry that
+contains only mocks/tiny models. `deploy.py up --dry-run` / `down --dry-run`. License audit script v0. Litestream
 config.
 
 Acceptance:
@@ -51,12 +110,14 @@ Acceptance:
   mocks on CPU verify plumbing only). Low-confidence items land in the review queue.
 - OCR: dimension strings on synthetic sheets read with ≥ 0.98 exact-match at 300 DPI (GPU run).
 - Schedules linked to plan tags on all golden projects.
+- **VLM A/B** (GPU): Qwen3.6-27B-FP8 vs Qwen3.8-27B-FP8 on classification, overlay verification and
+  judge accuracy. The winner becomes primary by config (ADR-M01).
 
 ### Phase 3: Plan extraction + Gate A (S2, S3) + synthetic plan generator
 Scope: synthetic plan generator (raster with noise/skew/stamps/hatching/fonts/languages/phone
 distortion; vector PDF; DXF; exact GT). Extractors for IFC, DXF, vector PDF and raster (CV baseline).
 Shared PlanBuilder, scale estimators + reconciliation, dimension parser, registration, heights,
-validators. Gate A SVG editor. Training-example capture. Plan-segmentation training script
+validators. On-demand VLM coordinate assist (hint → snap to evidence → `vlm_assisted` provenance → Gate A confirmation). Gate A SVG editor with suggestion review. Training-example capture. Plan-segmentation training script
 (runs on the pod; trains on synthetic + firm archive; NC datasets forbidden).
 Acceptance (`make eval` plan table):
 - Vector sources (DXF/PDF): wall F1 ≥ 0.98, opening F1 ≥ 0.95, scale error ≤ 1%.
@@ -65,6 +126,9 @@ Acceptance (`make eval` plan table):
 - Validators: 100% detection of injected plan defects (open room, opening outside host, overlapping
   rooms, area-label mismatch > 3%, unreachable room).
 - Gate A edits round-trip into an immutable PlanVersion; corrections stored as training examples.
+- Assist path: fires only on its triggers (asserted); hints with no evidence are never inserted
+  (property test with adversarial hints); accepted assists match synthetic GT within the normal
+  tolerance in ≥ 95% of cases; assist rate and acceptance rate reported in `make eval`.
 
 ### Phase 4: Scene, cameras, base render (S5 geometry/lighting, S6, S7)
 Scope: full SceneCompiler (walls with openings, floors, ceilings, skirting, parametric doors and
@@ -104,7 +168,12 @@ Acceptance:
   corruption type (GPU run on the pod; the CPU run with mocks verifies plumbing only and is labelled
   as such).
 - No geometry-failing image can reach a bundle (guard test with forced failures).
-- Quantized variants enabled only after a measured A/B on the QA metrics.
+- Quantized variants enabled only after a measured A/B on the QA metrics. The A/Bs cover: FP8
+  transformer vs BF16 (gpu48 enablement), Lightning 8-step vs full steps for finals, and
+  FireRed-Image-Edit vs Qwen-Image-Edit-2511.
+- The per-pixel-strength wrapper for `QwenImageEditPlusPipeline` and the tiled refiner are covered by
+  CPU tests with a tiny random-weight transformer (shape/blend/seam logic) and by fault injection on
+  GPU.
 
 ### Phase 7: Iteration + deliverables (S10)
 Scope: Gate D gallery (QA badges, compare slider, "why flagged"). Bundle (16-bit PNG, JPEG, EXR,
@@ -141,4 +210,16 @@ retries, fallbacks) · fault injection (detection %, false-alarm %, per-type) ·
 VRAM peaks. CI runs the CPU subset; the pod smoke test runs the GPU subset.
 
 ## Open questions for the owner (defaults apply if unanswered)
-<!-- QUESTIONS -->
+Answer these when approving. Each has a default that applies if unanswered.
+
+| # | Question | Why it matters | Default if unanswered |
+|---|---|---|---|
+| Q-1 | **Which countries** do the firm and its clients operate in? Any data-residency requirement (e.g. EU-only processing)? | License territorial clauses; datacenter choice | Placeholder jurisdictions `[EU, UK, US, CH, TR, KR]`. Any territorial/cap/NC clause blocks the model. Datacenters restricted to EU/EEA with network-volume support (EU-RO-1, EU-CZ-1, EUR-IS-1, EUR-NO-1, …), resolved live |
+| Q-2 | **Second document language(s)?** | OCR model choice (GLM-OCR fallback lacks Arabic and Turkish), dimension/label dictionaries, CAD layer-name synonyms | English only in the dictionaries. The primary OCR covers 109 languages |
+| Q-3 | **Accept the SAM License** for SAM 3 (trade-controls/sanctions screening of clients, indemnity to Meta, Meta may change terms unilaterally, no patent grant)? | Best text-prompted segmentation for QA opening checks | **Not accepted.** Grounding DINO + SAM 2.1 (Apache) are used instead, and QA thresholds are unaffected (relative metrics) |
+| Q-4 | May the firm's **CAD archive** be used to train the plan-recognition model (client contracts)? May we use **CC BY 4.0 datasets** (ResPlan, Modified Swiss Dwellings) with attribution? | Raster-plan accuracy beyond the CV baseline | Synthetic data only, and Gate A stays mandatory for raster plans |
+| Q-5 | Is the firm an **ODA member** (ODA File Converter)? | DWG conversion quality | No: LibreDWG, with a request for DXF/PDF export when conversion fails |
+| Q-6 | **Budget:** OK with gpu80 (H100/A100 class, hourly price shown at deploy) + a ~550 GB network volume (~$39/month)? Should the idle watchdog be on by default? | Cost | gpu80; watchdog **off** (per brief) |
+| Q-7 | Can you share 2–3 **anonymised real projects** for acceptance testing (in addition to the synthetic golden projects)? | Realism of acceptance | Synthetic golden projects only |
+| Q-8 | **Credentials for Phase 8:** RunPod API key, Hugging Face read token (with gated terms accepted if Q-3 is yes), GitHub classic PAT with `read:packages` for the pod to pull from GHCR. | One-command deploy | Not needed before Phase 8. CI pushes to GHCR with `GITHUB_TOKEN` |
+

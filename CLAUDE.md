@@ -17,6 +17,9 @@ Phase 1 until the owner approves the Phase 0 docs.
   archrender_blender/build.py -- scene.json out/`. `archrender_blender/` is GPL-3.0-or-later.
 - Every default goes through the assumption register; every extracted value is a `Fact` with
   `Provenance`.
+- VLMs verify and label by default. Coordinate help from the VLM happens **only when needed** (named
+  triggers) and only as hints snapped to measured evidence (`method="vlm_assisted"`, Gate A
+  confirmation). It is never used for scale (ADR-S19).
 - Every model role has primary / fallback / mock; tests run on CPU with mocks only.
 - The license gate is enforced at download, load and in CI; never bypass it.
 - Never weaken a threshold, special-case a fixture, or fake a result to get green; report misses.

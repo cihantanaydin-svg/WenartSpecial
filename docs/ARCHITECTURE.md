@@ -18,10 +18,10 @@ the system sends it to a human gate.
 
 | # | Principle | Mechanism | Enforced in | Proven by |
 |---|---|---|---|---|
-| 1 | Geometry measured, never hallucinated | PlanGraph built only by deterministic extractors (IFC/DXF/PDF/raster CV). VLMs *verify* and *label*, never emit coordinates (the VLM output schemas contain no coordinate fields). Diffusion runs only in S8, under masks, and is checked in S9. | `plan/`, `refine/`, `qa/` | Property tests; the S9 geometry-drift metrics; fault injection |
+| 1 | Geometry measured, never hallucinated | PlanGraph built by deterministic extractors (IFC/DXF/PDF/raster CV). VLMs *verify* and *label* by default. **Only when needed** (a named trigger fires, e.g. an extractor finds nothing or is low-confidence, or a validator fails), the VLM may propose coordinates as **hints**: points or boxes on full-resolution tiles. A hint never enters the PlanGraph directly. It seeds a deterministic local search that must **snap to measured image/vector evidence**. Snapped results carry `method=vlm_assisted` and force Gate A review, and unsnappable hints are shown only as suggestions (§6 S2.10, ADR-S19). Diffusion runs only in S8, under masks, and is checked in S9. | `plan/assist.py`, `plan/`, `refine/`, `qa/` | Property tests; hint-snapping tests (a hint with no evidence is rejected); the S9 geometry-drift metrics; fault injection |
 | 2 | Provenance + confidence on every fact; conflicts surfaced | Every extracted value is a `Fact[T]` carrying `Provenance`. A `ConflictDetector` runs after each extractor, and precedence rules produce a *proposed* resolution that still needs user confirmation. | `core/facts.py`, `understand/`, `brief/` | Snapshot tests of conflict sets on golden projects |
 | 3 | Assumption register | Defaults are read only through `Assumptions.use(key, value, reason)`, which records the use. The register is shown in the UI and printed in the QA report. | `core/assumptions.py` | A lint test forbids bare default constants in stage code |
-| 4 | Human gates A–D | Gates are DAG nodes with policy `always | on_low_confidence | never`; auto-pass requires *every* validator to be above threshold | `pipeline/gates.py` | Integration tests for each policy |
+| 4 | Human gates A–D | Gates are DAG nodes with policy `always` / `on_low_confidence` / `never`; auto-pass requires *every* validator to be above threshold | `pipeline/gates.py` | Integration tests for each policy |
 | 5 | Model-agnostic | One typed `Protocol` per role; the registry picks primary / fallback / mock per hardware profile; swapping a model is a YAML change | `models/` | CPU test suite runs 100% on mocks |
 | 6 | License gate | `LicenseGate.check()` runs inside `ModelManager.load()`, `AssetLibrary.enable()` and the dependency audit in CI; entries not commercial-OK for the configured jurisdictions cannot be loaded | `models/license_gate.py`, `scripts/license_audit.py` | Unit tests with synthetic registry entries; CI job |
 | 7 | Reproducible | Pinned model revisions + SHA256; base image pinned by digest; `RunManifest` per job; content-addressed stage cache | `core/manifest.py`, `pipeline/cache.py` | Re-run determinism test (same inputs → same cache keys → cache hits) |
@@ -75,7 +75,7 @@ every route is authenticated. vLLM, metrics and the supervisor socket bind to 12
 | `api` | `uvicorn archrender.api.app:app --host 0.0.0.0 --port 8000` | Serves `/api/v1/*`, `/healthz`, `/readyz` and the static UI from the same origin. Never touches the GPU. |
 | `worker-gpu` | `python -m archrender.pipeline.worker --queue gpu` | Exactly one. Owns the `ModelManager` (the VRAM arbiter), drives vLLM sleep/wake, and spawns Blender subprocesses. |
 | `worker-cpu` | `python -m archrender.pipeline.worker --queue cpu --concurrency ${CPU_WORKERS}` | Parsing, geometry, QA math and bundling. Each untrusted parser runs in a child process with `RLIMIT_AS`, `RLIMIT_CPU`, a wall-clock timeout, no network namespace (best effort) and a scratch cwd. |
-| `vllm-primary` | `/opt/venv-vllm/bin/vllm serve … --host 127.0.0.1 --port 8101 --enable-sleep-mode` | Profile-dependent. Started at boot; slept or woken by the GPU worker. |
+| `vllm-primary` | `VLLM_SERVER_DEV_MODE=1 /opt/venv-vllm/bin/vllm serve … --host 127.0.0.1 --port 8101 --enable-sleep-mode` | Profile-dependent. Started at boot; slept (`POST /sleep?level=1`) or woken (`POST /wake_up`) by the GPU worker. Dev mode exposes extra routes, so it binds to localhost only. |
 | `vllm-judge2` | same, port 8102 | Second-family tie-breaker. `autostart=false`; started on demand by the GPU worker through the supervisor XML-RPC socket (unix socket, 0700). |
 | `litestream` | `litestream replicate` | Streams the local SQLite WAL continuously to `/workspace/db/replica` (see ADR-S03). |
 | `watchdog` | `python -m archrender.ops.idle_watchdog` | Optional, off by default. Stops the pod after N idle minutes. |
@@ -85,20 +85,20 @@ every route is authenticated. vLLM, metrics and the supervisor socket bind to 12
 vLLM pins exact `torch`/CUDA versions that conflict with the latest diffusers stack, and Blender ships
 its own Python. So there are **three isolated environments**:
 
-1. `/opt/venv` holds the app: FastAPI, pipeline, diffusers, torch, and CV/geometry libs. It is locked by
-   `uv.lock`.
-2. `/opt/venv-vllm` holds vLLM with its own pinned torch. It is locked by
+1. `/opt/venv` holds the app: FastAPI, pipeline, diffusers 0.40, torch 2.14 cu130, and CV/geometry
+   libs, on Python 3.12. It is locked by `uv.lock`.
+2. `/opt/venv-vllm` holds vLLM 0.30.x, which pins torch 2.13. It is locked by
    `deploy/vllm/requirements.lock` (generated by `uv pip compile --generate-hashes`), and the app
    talks to it only over the OpenAI-compatible HTTP API on localhost.
-3. Blender's bundled Python runs only `archrender_blender/` scripts, which use the stdlib, `bpy`,
-   `bmesh`, `mathutils` and Blender's bundled `numpy`. The app **never imports `bpy`**.
+3. Blender 5.2 LTS bundles Python 3.13 and NumPy 2.3. It runs only `archrender_blender/` scripts,
+   which use the stdlib, `bpy`, `bmesh`, `mathutils` and `numpy`. The app **never imports `bpy`**.
 
 ### 3.3 Filesystem layout
 
 ```
 /opt/archrender            app source (image)          /opt/venv, /opt/venv-vllm, /opt/blender
 /opt/archrender/ui/dist    built UI (image)
-/var/lib/archrender/db     SQLite (WAL) on container disk (fast, correct POSIX locking)
+/var/lib/archrender/db     SQLite (WAL) on container disk (local POSIX locks; the volume is MooseFS/FUSE)
 /cache/hot                 hot model staging on container disk (profile-controlled, measured)
 /workspace                 network volume (persistent)
   ├─ models/blobs/sha256/<ab>/<hash>       weight files, content-addressed → automatic dedupe
@@ -108,8 +108,8 @@ its own Python. So there are **three isolated environments**:
   │    ├─ cas/sha256/<ab>/<hash>           per-project content-addressed artifacts
   │    ├─ uploads/<upload_id>/             chunk staging (deleted after assembly)
   │    └─ bundles/<bundle_id>.zip          prebuilt downloads
-  ├─ db/replica/                           litestream replica (restored at boot)
-  ├─ cache/{hf,torch,triton,vllm}/         compile + kernel caches
+  ├─ db/replica/  db/snapshots/            litestream replica + hourly VACUUM INTO snapshots
+  ├─ cache/{hf,torch,triton,vllm,cuda,optix}/  compile + kernel caches (Cycles PTX JIT paid once per volume)
   └─ logs/                                 JSON logs (rotated)
 ```
 
@@ -134,7 +134,9 @@ class Provenance(BaseModel):
     source_doc: DocId; page: int | None; bbox_px: BBox | None  # in the page raster at 300 DPI
     bbox_plan: BBox | None                  # after document→plan affine, meters
     method: Literal["ifc","dxf_entity","dxf_dimension","pdf_vector","pdf_text","raster_cv",
-                    "raster_seg","ocr","vlm","schedule","user","default","derived"]
+                    "raster_seg","ocr","vlm","vlm_assisted","schedule","user","default","derived"]
+    assist: VlmAssist | None                # set when method == "vlm_assisted": trigger, hint (px),
+                                            # snapped geometry, evidence score, snap residual
     model: ModelRef | None                  # role, repo, revision, sha of weights file set
     confidence: float                       # calibrated 0..1
     created_at: datetime
@@ -294,12 +296,13 @@ grouping* inside a short window (5 s) so that two projects' S8 tasks run back to
 - SHA256 + dedupe per project. ZIPs are unpacked recursively under limits: max total uncompressed
   size, max ratio 100:1, max entries, max depth 3. Absolute paths, `..`, symlinks and device files
   are rejected, and names are normalised to NFC.
-- Images: EXIF orientation applied, converted to sRGB (ICC via Pillow ImageCms), HEIC → PNG.
+- Images: EXIF orientation applied, converted to sRGB (ICC via Pillow ImageCms). HEIC → PNG via
+  `heif-dec` (libheif decoder plugin only, ADR-S17).
 - PDFs: split per page. Vector content is kept (paths/text extracted in S2 via pypdfium2), and each
   page is rasterised at ≥ 300 DPI (adaptive: large sheets at 300 DPI, capped by a pixel budget with
   tiling metadata).
-- DWG → DXF via ODA File Converter or LibreDWG in a separate process (licensing in
-  [MODEL_SELECTION.md §Tools](MODEL_SELECTION.md)).
+- DWG → DXF via LibreDWG `dwg2dxf` in a sandboxed separate process. ODA File Converter is used only
+  if the firm is an ODA member (non-members may use it only for non-commercial purposes; ADR-S16).
 - Office: DOCX/XLSX/PPTX via Docling / openpyxl, with no macro execution (macro-enabled formats
   rejected; `.xlsm` read as data only with VBA ignored).
 - Output: `Document(id, kind, sha256, pages: list[PageRef], meta)`.
@@ -316,7 +319,9 @@ grouping* inside a short window (5 s) so that two projects' S8 tasks run back to
 - **Title block**: located by bottom-right/bottom-strip heuristics + OCR field patterns (sheet no.,
   title, scale `1:50`/`1/4" = 1'-0"`, level, date). Scale text becomes a `Fact`.
 - **North arrow**: template matching + VLM verification of the detected glyph region → `north_angle`
-  Fact (CV-measured, VLM only confirms).
+  Fact (CV-measured, VLM confirms). If template matching finds nothing, the VLM may point to the
+  arrow as a hint. The angle is still measured by CV on that region, and the result is marked
+  `vlm_assisted` (ADR-S19). The same applies to title blocks, scale bars and legends.
 - **Schedules**: tables from PDF (vector text grid) or XLSX/DOCX. Column semantics are mapped by
   header synonyms (multilingual dictionary), with the VLM as a fallback for header→field mapping only.
   Rows are linked to plan tags (door/window tags, room numbers) by exact/normalised string match.
@@ -347,7 +352,8 @@ into the wall graph, openings and rooms, so the IFC, DXF, PDF and raster paths s
    exists, a deterministic CV baseline is used: thick-stroke extraction via distance transform +
    morphology. Then skeleton → graph → RDP → total-least-squares line fit → angle clustering → snap
    → junction closure, and thickness from the distance transform. The VLM sees *overlays* and answers
-   "does this overlay match the drawing? which room label?", and its answers never move vertices.
+   "does this overlay match the drawing? which room label?". By default its answers never move
+   vertices. Coordinate help is available only through the assist path (step 10).
 6. **Scale reconciliation**: independent estimators produce `(m_per_unit, σ, method)`:
    (a) stated scale × page units (exact for CAD PDFs: 1 pt = 25.4/72 mm × scale);
    (b) dimension strings associated to dimension lines (DXF `DIMENSION` measurement or text
@@ -371,9 +377,39 @@ into the wall graph, openings and rooms, so the IFC, DXF, PDF and raster paths s
    computed area vs area label within ±3%; every room reachable via doors/openings from an entry
    (graph BFS); envelope closed (exterior wall loop); double-height spaces flagged.
 
+10. **VLM coordinate assist, only when needed** (`plan/assist.py`, ADR-S19).
+    - **Triggers.** The assist runs only when a trigger fires, and the trigger is recorded:
+      - the raster CV/segmentation finds no candidates in a region that has drawing ink;
+      - a validator fails (open room, a schedule tag with no matching opening, an unreachable room,
+        an area-label mismatch > 3%);
+      - an element's extractor confidence is below threshold;
+      - title block, north arrow or scale bar not found;
+      - a phone photo's sheet corners cannot be detected.
+    - **Ask.** The VLM gets the relevant **full-resolution tile** (never a downscaled sheet) and a
+      schema-constrained question ("point to the door hinge of tag D-04", "box the window between
+      these two walls"). The answer is points/boxes in tile pixels, mapped back to page coordinates.
+    - **Snap.** A deterministic local search inside a tolerance window around the hint
+      (default 40 px at 300 DPI) looks for evidence: stroke pixels / vector segments for walls, an arc
+      for a door swing, parallel glazing lines for windows, text boxes for labels. The element is
+      rebuilt from that evidence with the normal fitting code (line fit, arc fit, hosting).
+    - **Accept only with evidence.**
+      - The snapped element is accepted only if the evidence covers ≥ 80% of its length/outline and
+        the snap residual is within 1.5× the extractor's normal tolerance.
+      - Accepted elements get `method="vlm_assisted"`, capped confidence, and a Gate A review flag.
+        **Gate A cannot auto-pass** while any `vlm_assisted` element is unconfirmed.
+      - Hints without evidence are **never** inserted. They appear at Gate A as dashed "suggestions"
+        that the user can accept, edit or reject.
+    - **Budget.** At most N assist calls per sheet (default 20). Every call is logged with prompt,
+      tile, raw answer and snap outcome, and user decisions on suggestions are saved as training
+      examples.
+    - **Safety check.** Scale is never taken from VLM coordinates: dimensions come from scale
+      estimators only.
+
 ### S3 Gate A: plan review (UI + `api/plan`)
 An SVG editor overlays walls, openings and rooms on the page raster, with drag handles, snap, a
 split/merge wall tool, an opening type/swing editor, room naming, and 2-click scale calibration.
+`vlm_assisted` elements are highlighted for confirmation, and unsnapped VLM hints appear as dashed
+suggestions (accept / edit / reject).
 The issue list is clickable (zooms to location). Approve → immutable `PlanVersion`. Corrections are
 saved as training examples.
 
@@ -404,7 +440,7 @@ saved as training examples.
   width, tile size), and Blender's mapping node applies `1/size`.
 - **Doors/windows**: a parametric generator (frame profile, leaf, glazing 6 mm Principled glass
   IOR 1.52, hardware), sized exactly to the opening.
-- **Lighting**: sun azimuth/elevation from **pvlib** `solarposition` (lat/lon/date/time/timezone) →
+- **Lighting**: sun azimuth/`apparent_elevation` from **pvlib** `get_solarposition` (NREL SPA, BSD-3; lat/lon/date/time/timezone) →
   rotated by the plan north angle → sun lamp + Nishita-type sky, or an HDRI. Window portal lights,
   RCP fixtures with blackbody CCT and lumens, and **auto-exposure**: a 128-px prepass computes the
   log-average luminance on non-window pixels and sets exposure so it maps to mid-grey 0.18 under AgX.
@@ -423,8 +459,10 @@ saved as training examples.
 - **Asset library**: metadata (category, style tags, real dims, license, source URL, polycount, PBR
   maps + resolution, thumbnails, embeddings). The import validator checks bbox vs declared dims
   (±2%), pivot at floor centre, Z-up, unit scale, texture resolution, and license in the allowlist.
-  Seed: CC0 Poly Haven + ambientCG subsets. Optional image-to-3D for client furniture photos,
-  flagged `generated`.
+  Seed: CC0 Poly Haven + ambientCG subsets, mirrored once at first boot with provenance (source, id,
+  licence, date). The Poly Haven API ToS asks for a "Powered by Poly Haven" credit and an identifying
+  User-Agent, so the asset browser shows the credit. Image-to-3D for client furniture photos is
+  disabled in v1 (licence blockers, ADR-M13); when enabled, its output is flagged `generated`.
 - **Blender**: `blender -b --factory-startup --python archrender_blender/build.py -- scene.json out/`
   builds the `.blend`, then GLB export (viewer) and the scene manifest listing every asset and its
   license.
@@ -446,9 +484,11 @@ saved as training examples.
 - Gate C: fast previews (16 spp, 640 px, OIDN) + a top-down layout diagram.
 
 ### S7 Base render (`render/`, Blender Cycles)
-- At startup the worker enumerates Cycles devices inside Blender. It prefers OptiX, else CUDA, and
-  logs `{backend, device, driver}` into the manifest. If neither is available: loud error, or CPU
-  only in `cpu_test`.
+- At startup the worker enumerates Cycles devices inside Blender (`refresh_devices()`, Blender 5.2
+  API). It prefers OptiX, else CUDA, and logs `{backend, device, driver}` into the manifest. If
+  neither is available: loud error, or CPU only in `cpu_test`. On A100/H100/B200, Blender 5.2
+  JIT-compiles PTX on first use, so the kernel cache lives on the volume and is warmed by the boot
+  self-test (ADR-S15).
 - Adaptive sampling (noise threshold 0.01, max 1024 spp at 4K by default) + OIDN (GPU) denoise, with
   AgX view transform.
 - Passes: beauty (multilayer EXR half + 16-bit PNG), Z depth (converted to metric distance along
@@ -462,16 +502,24 @@ saved as training examples.
   decor-allowed regions come from the index passes.
 
 ### S8 Generative refinement (`refine/`)
-- **Faithful mode** (client default). Global pass at the model's native resolution (≈1.0–1.6 MP)
-  with: image 1 = base render, conditioning = depth and/or edges (as the model family supports),
-  style references as extra images, and a prompt compiled **deterministically** from the
-  DesignBrief (Jinja2 template; the prompt text + template hash are logged). Strength is applied as a
-  **per-pixel strength map** via latent blending at each denoising step (differential-diffusion
-  style): structural regions low (default 0.15), furniture moderate (0.30), decor-allowed regions
-  up to 0.55 (only when optional decor is enabled). Then a guided upscale to 3840×2160 and a
-  **tiled low-strength pass** (tiles ≈1024–1328 px, 25% overlap, feathered latent blending) with each
-  tile conditioned on the full-res Cycles crop. A seam check (gradient discontinuity along tile
-  borders vs interior) failing → re-run with a shifted grid.
+- **Faithful mode** (client default; primary model Qwen-Image-Edit-2511, ADR-M08).
+  - **Global pass** at the model's native resolution (≈1.0–1.6 MP, e.g. 1664×928). Inputs: image 1 =
+    base render; image 2 = the depth or edge map, as **in-context conditioning** (this model family has
+    no ControlNet module); at most one style reference. The prompt is compiled **deterministically**
+    from the DesignBrief (Jinja2 template; the prompt text + template hash are logged).
+  - **Strength** is our own code, because `QwenImageEditPlusPipeline` has no `strength`/`mask`. We
+    start from the render latents noised to σ₀ on a truncated schedule, then apply a **per-pixel
+    strength map** by latent re-anchoring in `callback_on_step_end` (differential-diffusion style):
+    structural regions low (default 0.15), furniture moderate (0.30), decor-allowed regions up to 0.55
+    (only when optional decor is enabled).
+  - **Upscale + tiled pass**: a deterministic GAN upscale (HAT) to 3840×2160, then a **tiled
+    low-strength pass** (≈1328 px tiles, 256 px overlap, one global noise field, cosine-weighted
+    latent averaging; MultiDiffusion style, our implementation). Each tile is conditioned on the
+    native 4K Cycles crop.
+  - **Seam check**: gradient discontinuity along tile borders vs the interior. A failure re-runs with
+    a shifted grid.
+  - **Colour matching**: LAB colour matching back to the base on structural materials.
+  - **Steps**: Lightning 8-step LoRA for Gate C previews only; finals use 30–40 steps with true-CFG.
 - **Best-of-N** seeds per view (profile-dependent), ranked by QA pass → IQA/aesthetic score
   (ranking only, never gating) → mood-board similarity.
 - **Cross-view harmonisation**: per-material mean Lab across views (material masks) → a smooth
@@ -499,7 +547,7 @@ for geometry metrics.
 | Technical | Clipping % (excluding windows/emitters), noise σ (wavelet MAD), banding, Laplacian sharpness vs base, tile seams, color cast on neutral surfaces | per-config |
 | Cross-view | Per-material ΔE across views; VLM pairwise "same material?" | ≤ 3; all "yes" |
 
-**Judge discipline**: temperature 0, schema-constrained JSON (vLLM guided decoding), specific binary
+**Judge discipline**: temperature 0, thinking disabled, schema-constrained JSON (vLLM `response_format: json_schema` via xgrammar), specific binary
 questions, evidence required (bbox + reason). A second model family breaks ties on critical checks
 (must-have, forbidden, melted/duplicated objects) when the primary judge fails or reports low
 confidence. Deterministic metrics override the VLM on anything geometric.
@@ -510,6 +558,8 @@ confidence. Deterministic metrics override the VLM on anything geometric.
 attempt(view, seed, strength_map, control_weight)
   geometry fail → strength ×0.7, control +0.2   (≤2 times)
                → new seed (reset params)          (repeat)  … up to K=4 total retries
+               → hard structural composite (Cycles pixels in structural masks, Poisson-blended
+                 borders), re-QA'd like any candidate
                → FALLBACK: deliver the Cycles base render (flagged), never the failing image
   brief fail   → deterministic fix first (wrong material binding / missing asset → S5 re-run),
                  then prompt emphasis template, then Gate D with evidence
@@ -642,21 +692,32 @@ reconnect.
 ---
 
 ## 11. Deployment architecture (summary; details in DEPLOY.md, written in the deployment phase)
-- **Image**: CUDA base pinned by digest (built for sm_80 → sm_120), Blender LTS tarball
-  (checksum-verified) in `/opt/blender`, three venvs, UI built in a Node stage,
-  `NVIDIA_DRIVER_CAPABILITIES=all` (OptiX needs `libnvoptix` from the driver). No weights baked
-  unless `--build-arg BAKE_MODELS=profile`.
+- **Image**: `nvidia/cuda:13.0.3-runtime-ubuntu24.04` pinned by digest (torch cu130 covers sm_75 →
+  sm_120), Blender 5.2 LTS tarball (checksum-verified) in `/opt/blender`, three venvs, UI built in a
+  Node stage, `NVIDIA_DRIVER_CAPABILITIES=all` (OptiX's `libnvoptix` is mounted only with the
+  `graphics` capability). No weights baked unless `--build-arg BAKE_MODELS=profile`. Host driver ≥ 580
+  (CUDA 13.0), enforced by `minCudaVersion` at pod creation and checked at boot.
 - **CI**: GitHub Actions builds on tag → private GHCR; the digest is written to the release notes and
   to `deploy/runpod/image.lock`.
 - **entrypoint.sh** (idempotent): GPU/driver/CUDA/disk checks → `/workspace` tree → litestream
   restore → `download_models.py --profile $PROFILE` (resumable, SHA256, license-gated; a gated-model
   403 names the HF page to accept) → seed CC0 assets → migrations → supervisor start → self-test →
   flip `/readyz`.
-- **deploy.py up** (stdlib + requests): validate `.env` → choose a datacenter satisfying the GPU and
-  data-residency settings → create/reuse the network volume (size = registry weights + assets + 30%)
-  → registry auth → create/update the template → create the pod (Secure Cloud, min CUDA) → poll →
-  wait for `/readyz` via `https://{POD_ID}-8000.proxy.runpod.net` → print URL + login steps.
-  `--dry-run` prints every payload, plus equivalent `runpodctl` commands and a console checklist.
+- **deploy.py up** (stdlib + requests, **RunPod REST v2** since v1 retires 2026-11-15; ADR-S14):
+  1. Validate `.env`.
+  2. Read the GPU and datacenter catalogs (price, stock, CUDA versions, residency/compliance,
+     network-volume types).
+  3. Create or reuse the network volume (size = registry weights + assets + 30% + project allowance).
+  4. Upsert secrets and GHCR registry credentials via the API.
+  5. Upsert the template.
+  6. Run the create-pod placement loop over (GPU type, DC) candidates (Secure Cloud,
+     `minCudaVersion`).
+  7. Poll, streaming system logs on failure.
+  8. Wait for `/readyz` via `https://{POD_ID}-8000.proxy.runpod.net`, then print the URL, login steps
+     and the hourly cost.
+
+  `--dry-run` prints every payload, plus best-effort `runpodctl` equivalents and a console
+  checklist. `down` terminates the pod and keeps the volume.
 - **Fallback**: `bootstrap_on_pytorch_template.sh` installs everything under `/workspace/opt`, so
   it survives restarts.
 - **Serverless-ready**: stages are pure functions of `(inputs, config, models)` with CAS I/O. A

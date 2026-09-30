@@ -16,6 +16,7 @@ an owner mechanism and an early-warning signal. Re-review at the end of every ph
 | Q7 | Asset library too thin or stylistically off for the brief (CC0 furniture is limited) | H | M | Firm-owned asset import pipeline with validator; derive-and-flag materials; optional image-to-3D (flagged generated); Gate B/C show exactly what will be used | Brief-adherence failures attributed to "no asset match" |
 | Q8 | Refiner "improves" materials away from the spec (e.g. oak → walnut) | M | M | Per-material ΔE vs base render; structural strength low; prompt compiled from brief; deterministic re-fix first | Brief-adherence metrics |
 | Q9 | Lighting realism: exposure/white balance inconsistent across views | M | L | Auto-exposure prepass per view with a shared section-level exposure bias; AgX; CCT from brief; recorded as assumptions | Technical QA (clipping, cast) |
+| Q10 | VLM coordinate hints are imprecise or hallucinated (owner-requested assist path, ADR-S19) | M | M | Triggered only when needed; full-res tiles; hint-then-snap with ≥ 80% evidence coverage; `vlm_assisted` provenance; Gate A confirmation required; never used for scale | Eval: assist precision/acceptance vs synthetic GT; a no-evidence hint is never inserted (test) |
 
 ## B. Licensing and legal
 
@@ -29,6 +30,10 @@ an owner mechanism and an early-warning signal. Re-review at the end of every ph
 | L6 | CC0 asset provenance (mislabelled uploads) | L | M | Seed only from curated CC0 sources with source URLs; firm assets require an explicit license field; the import validator rejects unknown licenses | Asset audit |
 | L7 | Paint-code (RAL/NCS/Pantone) conversion tables have their own licenses | M | L | Use only public-domain or openly licensed conversion data; results flagged as approximations; unsupported codes routed to the user | License audit covers data files |
 | L8 | Client confidentiality: data leaves the pod | L | H | No third-party AI APIs; HF offline after boot; telemetry off; Secure Cloud; model servers on localhost; audit log; purge endpoint | Boot egress self-test; route-auth test |
+| L9 | Meta SAM License (SAM 3): trade-controls/sanctions clause, indemnity, **terms can change "effective immediately"**, no patent grant in the sam3 copy | M | M | Conditional class: off until the owner accepts (Q-3); LICENSE snapshot pinned per download; clients screened; Apache fallback (Grounding DINO + SAM 2.1) | `accepted_license_terms` audit |
+| L10 | Hidden non-commercial pieces inside permissive projects (nvdiffrast in TRELLIS.2/SAM 3D, RMBG-2.0, smplx, pyiqa's PolyForm NC, DA3 Large/Giant NC next to Apache siblings, Qwen-Image-2.1 research licence beside Apache 2511/2512) | H | H | Registry lists exact repo ids, not families; blocked-package list in the audit (nvdiffrast, pyiqa, smplx, ultralytics, pymupdf); CI rejects unlisted `depth-anything/*` ids | License audit |
+| L11 | ODA File Converter is non-commercial for non-members | H | L | LibreDWG CLI by default; ODA only with membership (Q-5) | — |
+| L12 | pillow-heif wheels bundle GPL-2 x265 | M | L | Not a dependency; HEIC via libheif decoder plugin CLI (ADR-S17) | License audit |
 
 ## C. Infrastructure (RunPod, GPU, containers)
 
@@ -48,6 +53,12 @@ an owner mechanism and an early-warning signal. Re-review at the end of every ph
 | I12 | Gated HF model access not accepted → 403 at boot | H | L | `download_models.py` fails fast naming the exact HF page to accept; the profile may fall back to the non-gated alternative if configured | Boot log |
 | I13 | vLLM / diffusers / torch version conflicts | H | M | Separate venvs (ADR-S02); pinned locks; the image build runs import smoke tests | CI image job |
 | I14 | Runtime support lags for new models (e.g. an edit model's conditioning feature not in diffusers) | M | M | Pin the diffusers version that supports the needed classes; a headless ComfyUI backend is allowed only if a capability is missing; fallback model in the registry | Phase-6 spike |
+| I15 | **RunPod REST v1 retires 2026-11-15**; GraphQL early 2027; `runpodctl` 2.14 still uses v1 | H | M | `deploy.py` uses REST v2 only; runpodctl commands emitted as best-effort extras | `deploy.py --dry-run` against v2 schema |
+| I16 | v2 pod create does not search capacity across GPU types | H | M | Explicit placement loop over (GPU type, DC) candidates with the spec's retry semantics (ADR-S14) | Deploy log |
+| I17 | Blender 5.2 has no CUDA cubins for sm_80/sm_90/sm_100 → PTX JIT on first render (minutes) | H | L | Kernel caches on the volume; boot self-test warms them; `/readyz` flips only after warm-up | Boot timings |
+| I18 | Host drivers < 580 can't run the CUDA 13.0 image (torch 2.14 cu130, vLLM 0.30 cu130) | M | H | `minCudaVersion: 13.0` at creation; boot check; if capacity is scarce, a cu129 image variant (torch ≤ 2.11 cu128 / vLLM cu129) is the documented fallback | deploy.py capacity report |
+| I19 | Qwen3.8's multimodal path is not yet verified in vLLM recipes; Gemma-4 FP8_BLOCK checkpoint produced garbage (vLLM #39407) | M | M | Qwen3.6 primary until the A/B; Gemma via QAT W4A16 or FP8-dynamic, never FP8_BLOCK | Phase-2 A/B |
+| I20 | Qwen-Image-Edit pipeline lacks strength/mask; our wrapper relies on diffusers internals (`callback_on_step_end`, sigma schedule) that may change | M | M | Pin diffusers 0.40.x; wrapper covered by unit tests on a tiny random-weight model; upgrade only with the fault-injection eval | CI + eval |
 
 ## D. Development environment and delivery
 

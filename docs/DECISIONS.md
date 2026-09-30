@@ -20,33 +20,46 @@ start/stop via XML-RPC is simpler to drive from Python).
 one job at a time, which is acceptable for a single-GPU firm tool.
 
 ## ADR-S02: Three isolated Python environments
-**Context.** vLLM wheels pin an exact torch/CUDA combination. diffusers support for new image models
-often needs a newer torch. Blender bundles its own CPython.
-**Decision.** `/opt/venv` (app + diffusers, `uv.lock`), `/opt/venv-vllm` (vLLM, hash-locked
-requirements), and Blender's Python (our `archrender_blender` scripts only). They communicate by
-HTTP (vLLM) and by files + CLI (Blender).
+**Context.** vLLM 0.30.0 (2026-09-22) pins `torch==2.13.0` and `fastapi<0.137`. The app wants
+torch 2.14.0 (2026-09-02; default PyPI wheel cu130) for diffusers 0.40.0, and FastAPI 0.142. Blender
+5.2 LTS bundles CPython 3.13.13 with NumPy 2.3.4. (PyPI metadata + Blender `versions.cmake`, checked
+2026-09-30.)
+**Decision.** Three environments, communicating by HTTP (vLLM) and by files + CLI (Blender):
+- `/opt/venv`: app + diffusers + torch 2.14 cu130, Python 3.12, `uv.lock`.
+- `/opt/venv-vllm`: vLLM 0.30.x with its pinned torch, hash-locked requirements.
+- Blender's Python: our `archrender_blender` scripts only.
 **Consequences.** Two torch copies in the image (+~5 GB). No dependency deadlocks, and vLLM can be
 upgraded independently. The license audit scans all three environments.
 
 ## ADR-S03: Job/state store: SQLite (WAL) on local disk + Litestream replication to the volume
-**Context.** Durable job queue + metadata (projects, versions, gates, audit, API keys). One node, one
-GPU worker, low write rate (< 100 writes/s). `/workspace` is a RunPod **network volume**. SQLite
-over network filesystems risks broken locking and WAL shared-memory corruption; SQLite's own
-documentation warns against network filesystems. The container disk is wiped on restart.
-**Decision.** SQLite in WAL mode at `/var/lib/archrender/db` (container disk: local, correct POSIX
-locks, fast) + **Litestream** (Apache-2.0, pinned ≥ 0.5.2, which fixed the 0.5.0 restore bugs)
-continuously replicating to a *file* replica at `/workspace/db/replica`. At boot, `litestream restore
--if-replica-exists`. A graceful shutdown (SIGTERM from supervisor) takes a final checkpoint. Job
-leasing uses `UPDATE … RETURNING` inside `BEGIN IMMEDIATE`.
-**Alternatives.** (a) SQLite directly on the network volume: unsafe unless the filesystem's locking
-is proven, and we cannot prove it from here. (b) Redis/Valkey with AOF on the volume: still needs a
-relational store for everything else; adds a server; Redis ≥ 7.4 license changes (Valkey is
-BSD-licensed). (c) Postgres: robust but heavier, and its data dir on a network FS has similar caveats.
-**Consequences.** On a hard crash, state after the last replicated WAL frame (seconds) can be
-lost. Stages are idempotent with CAS outputs, so work re-runs from cache. User actions are
-acknowledged only after commit, and Litestream's sync interval is set to 1 s. Evidence on the volume
-filesystem type is recorded in MODEL_SELECTION.md §Tools. The smoke test includes a kill-and-restore
-check.
+**Context.** The store holds the durable job queue and metadata (projects, versions, gates, audit,
+API keys). There is one node and one GPU worker, with a low write rate (< 100 writes/s).
+`/workspace` is a RunPod **network volume**, and there is evidence that it is **MooseFS over FUSE**:
+`findmnt` shows `mfs#<dc>.runpod.net:9421`, fstype `fuse` (github.com/bschilder/genomeOS/issues/253).
+SQLite's docs say "WAL does not work over a network filesystem". RunPod's docs warn that concurrent
+writes "may cause data corruption" (`storage/network-volumes.mdx`). The container disk is wiped on
+restart.
+**Decision.**
+- SQLite in WAL mode at `/var/lib/archrender/db` (container disk: local, correct POSIX locks, fast).
+- **Litestream** (Apache-2.0, pinned ≥ 0.5.2, which fixed the 0.5.0 restore bugs) continuously
+  replicates to a *file* replica at `/workspace/db/replica`. The replica is written only by that one
+  process, as immutable LTX files.
+- Plus an hourly `VACUUM INTO` snapshot to `/workspace/db/snapshots/` (keep 48) as a second recovery
+  path.
+- At boot: `litestream restore -if-replica-exists`, falling back to the latest snapshot.
+- SIGTERM from the supervisor triggers a final checkpoint.
+- Job leasing uses `UPDATE … RETURNING` inside `BEGIN IMMEDIATE`.
+**Alternatives.**
+- SQLite directly on the network volume: unsafe, per the evidence above.
+- Redis/Valkey: still needs a relational store; Redis ≥ 8 is RSALv2/SSPLv1/AGPLv3, and Valkey 9 is
+  BSD-3.
+- Postgres: robust but heavier, and its data dir on MooseFS has the same caveats.
+- Replicating to RunPod's S3-compatible API: possible later, if volumes are shared across pods.
+**Consequences.**
+- On a hard crash, only state after the last replicated WAL frame (≈1 s) can be lost.
+- Stages are idempotent with CAS outputs, so work re-runs from cache.
+- User actions are acknowledged only after commit.
+- The smoke test includes a kill-and-restore check.
 
 ## ADR-S04: Geometry compiled in the app; Blender only materializes, lights, renders, exports
 **Context.** Watertight, correct geometry must be testable in CI without Blender. Blender's Python
@@ -76,14 +89,21 @@ construction.
 **Consequences.** Robust to estimator bias. Needs the base render always (we have it). Fault
 injection validates sensitivity.
 
-## ADR-S07: Structural protection by per-pixel strength maps, not hard compositing
-**Context.** Pasting base-render structure over a refined image creates lighting seams. Unmasked
-refinement risks geometry drift.
-**Decision.** Implement differential-diffusion-style latent blending: at each denoising step,
-latents in each region are re-anchored to the noised base latent according to a per-pixel strength
-map (structural low, furniture moderate, decor-allowed higher). Implemented as our own pipeline
-wrapper over the model's transformer/scheduler, with the model's native depth/edge conditioning on
-top.
+## ADR-S07: Structural protection by per-pixel strength maps; hard composite only as an escalation rung
+**Context.** Pasting base-render structure over a refined image risks lighting seams. Unmasked
+refinement risks geometry drift. `QwenImageEditPlusPipeline` (diffusers 0.40.0) has **no `strength`
+and no `mask` argument**, and its depth/edge "ControlNet" is in-context only (verified in the
+diffusers source), so protection has to be our own code.
+**Decision.**
+1. **Default: per-pixel strength.** Start from the Cycles render's latents noised to σ₀ with a
+   truncated schedule. At every step, re-anchor latents to the render latents noised to the current
+   σ according to a per-pixel strength map (structural low, furniture moderate, decor-allowed
+   higher), in `callback_on_step_end`. This is differential-diffusion style. Depth and edge maps go
+   in as in-context images.
+2. **Escalation rung (after the strength-reduction retries fail geometry QA):** a hard composite
+   that keeps the Cycles pixels inside the structural masks, with gradient-domain (Poisson) blending
+   at the mask borders. The result is re-QA'd like any candidate.
+3. **Final rung:** the pure Cycles render.
 **Consequences.** Coherent lighting and bounded geometric freedom. Requires pipeline-level code per
 model family (the wrapper is covered by mocks on CPU and by fault injection on GPU).
 
@@ -115,7 +135,8 @@ placeholder, and **any** territorial exclusion, MAU/revenue cap or non-commercia
 entry regardless of the list, until the owner confirms. Data residency: EU datacenters preferred in
 the placeholder.
 **Consequences.** Some models are disabled that might be legal for the firm. Revisited after answer
-Q-1 in PLAN.md.
+Q-1 in PLAN.md. Meta-licensed models (SAM 3) additionally require that clients are not targets of
+trade controls; the firm screens clients before enabling them.
 
 ## ADR-S11: PDF handling without AGPL
 **Decision.** pypdfium2 (Apache-2.0 / BSD-3; PDFium BSD-3) for vector paths, text objects and
@@ -128,6 +149,107 @@ binaries (GPL) in the runtime path.
 behind `https://{POD_ID}-8000.proxy.runpod.net` or any prefix without server rewrites.
 
 ## ADR-S13: Reports as HTML → PDF with WeasyPrint
-**Decision.** Jinja2 HTML report (also delivered as HTML) → PDF via WeasyPrint (BSD-3; system Pango
-libs, LGPL, dynamically linked).
+**Decision.** Jinja2 HTML report (also delivered as HTML) → PDF via WeasyPrint 70 (BSD-3; system
+Pango libs, LGPL, dynamically linked).
 **Alternatives.** ReportLab (BSD, programmatic layout, more code); headless Chromium (large).
+
+## ADR-S14: RunPod deployment through REST API v2, with an explicit placement loop
+**Context.** REST v1 (`rest.runpod.io/v1`) "is deprecated and will be retired on November 15,
+2026", and GraphQL is retiring in early 2027. REST v2 (`https://api.runpod.io/v2`) went GA on
+2026-08-18. A v2 pod create "places one specific GPU type … does not fall back". v2 can create
+secrets (`/v2/account/secrets`) and exposes catalogs with price, stock, CUDA versions and datacenter
+compliance. Evidence: `github.com/runpod/docs` @07ba10e, see [research/RUNPOD.md](research/RUNPOD.md).
+**Decision.** `deploy.py` (stdlib + requests) uses v2 only:
+1. Read the GPU and datacenter catalogs (filtered by profile GPU list, `minCudaVersion`,
+   residency region/compliance, network-volume support).
+2. Create or reuse the network volume in the chosen DC (`HIGH_PERFORMANCE` type where offered).
+3. Upsert secrets (`archrender_hf_token`, `archrender_admin_token`) and registry credentials.
+4. Upsert the template (no mounts; `startJupyter: false`).
+5. Loop create-pod over (GPU type, DC) candidates, following the spec's retry semantics.
+6. Poll `status`; stream `/v2/pods/{id}/logs?source=system` on failure (image-pull and CUDA-mismatch
+   diagnostics).
+7. Wait for `/readyz` via the proxy URL.
+
+`down` **terminates** the pod and keeps the volume, because a stopped pod may come back with
+"Zero GPUs". `runpodctl` equivalents are emitted as a courtesy (runpodctl v2.14 still calls v1 and
+GraphQL).
+**Consequences.** Robust against capacity gaps. No console clicks except accepting gated-model terms
+on Hugging Face.
+
+## ADR-S15: Blender 5.2 LTS, Cycles GPU with OptiX → CUDA fallback, persistent kernel caches
+**Context.**
+- **Versions:** Blender 5.2 LTS (5.2.2, tagged 2026-09-14) is supported until July 2028; 4.5 LTS
+  until July 2027.
+- **CUDA kernels:** 5.2 ships CUDA cubins for `sm_50…sm_75, sm_86, sm_120` + `compute_75` PTX (the
+  `CYCLES_CUDA_BINARIES_ARCH` default on the 5.2 branch). So A100 (sm_80), H100/H200 (sm_90) and B200
+  (sm_100) **JIT-compile PTX on first use**, while L40S/RTX 6000 Ada use the sm_86 cubin.
+- **OptiX:** needs driver ≥ 575 (5.2 manual *(snippet)*). `libnvoptix.so` is mounted only with the
+  `graphics` driver capability (`libnvidia-container src/nvc_info.c`).
+- **API changes in 5.x:** `Scene.node_tree` → `compositing_node_group`; `get_devices()` deprecated
+  → `refresh_devices()`.
+**Decision.**
+- Blender 5.2.2 LTS tarball in `/opt/blender`, SHA256-verified. The official `.sha256` is fetched in
+  CI and compared to the pinned `ARG BLENDER_SHA256`.
+- `ENV NVIDIA_DRIVER_CAPABILITIES=all`.
+- A device probe at boot: OPTIX → CUDA fallback, logged to the manifest.
+- `CUDA_CACHE_PATH`/`OPTIX_CACHE_PATH` on `/workspace/cache` with a 4 GiB max, so the one-time
+  JIT is paid once per volume. The boot self-test warms the cache with a tiny render.
+- Cycles only: no EEVEE, so no EGL dependency for rendering.
+- A golden-image test guards version drift.
+
+## ADR-S16: DWG conversion via LibreDWG CLI; ODA only with membership
+**Context.** ODA File Converter is free, but "if you are not an ODA member … you can use them for
+non-commercial applications only" (opendesign.com FAQ *(snippet)*). LibreDWG is GPL-3.0-or-later.
+**Decision.**
+- Default: `dwg2dxf` (LibreDWG 0.14) run as a separate sandboxed process on files, which is
+  arm's-length use with no linking.
+- The ODA converter is enabled only if `licenses.oda_member: true` is configured.
+- Conversion failures, or unsupported DWG versions, yield `INGEST_DWG_CONVERSION_FAILED` with the
+  hint "export DXF (or PDF/IFC) from your CAD tool".
+
+## ADR-S17: HEIC decode via libheif CLI (decoder plugin only)
+**Context.** pillow-heif wheels bundle x265 (GPL-2) + libheif/libde265 (LGPL-3)
+(`LICENSES_bundled.txt`).
+**Decision.** Convert HEIC → PNG with Ubuntu's `heif-dec` (libheif, LGPL) in the sandboxed parser
+subprocess, installing only the libde265 decoder plugin (no x265 encoder). pillow-heif is not a
+dependency.
+
+## ADR-S18: CUDA 13.0 runtime base; minimum host CUDA 13.0
+**Context.**
+- torch 2.14 wheels: cu126 (no Blackwell), cu130, cu132. The cu130 wheel covers sm_75–sm_120.
+- vLLM 0.30.0 defaults to cu130 (a cu129 variant exists).
+- Minimum drivers: CUDA 13.0 ≥ 580.65.06; 12.9 ≥ 575.51.03; 12.8 ≥ 570.26.
+**Decision.**
+- `FROM nvidia/cuda:13.0.3-runtime-ubuntu24.04@sha256:76f46f3e…` (digest from Docker Hub
+  2026-09-30; re-confirmed with `docker buildx imagetools inspect` in CI).
+- Pods are created with `gpu.minCudaVersion: "13.0"`.
+- The entrypoint checks `nvidia-smi` driver ≥ 580 and exits with a clear message otherwise.
+**Consequences.** One image for Ampere → Blackwell. The host pool is limited to drivers ≥ 580, and
+deploy.py reports when no capacity matches.
+
+## ADR-S19: VLM coordinate assistance: on demand, hint-then-snap, never direct
+**Context.** The original brief said the VLM "never supplies coordinates". The owner has since asked
+(2026-09-30 review comment on ARCHITECTURE.md) to **get help from the VLM for coordinates, but only
+when needed**. Deterministic extractors fail in predictable places: noisy rasters, phone photos,
+unusual symbols, missing title blocks or north arrows. Modern VLMs (Qwen3.6/3.8) can ground
+points and boxes, but their coordinates are imprecise, and on downscaled sheets they can be
+hallucinated.
+**Decision.** Add an **assist path** (`plan/assist.py`) with five rules:
+1. **Triggered, not default.** It runs only on named triggers: no candidates where ink exists, a
+   validator failure, low extractor confidence, a missing title block/north arrow/scale bar, or
+   undetected sheet corners. Each call is budgeted per sheet and logged.
+2. **Full-resolution tiles only.** The VLM receives a tile, not a downscaled sheet. Its answer is
+   schema-constrained points or boxes in tile pixels, mapped back to page coordinates.
+3. **Hint, then snap.** The VLM output only defines a search window. Geometry is rebuilt by
+   deterministic fitting from actual evidence: raster strokes, vector segments, arcs, text boxes.
+   Acceptance requires evidence coverage ≥ 80% and a snap residual ≤ 1.5× the normal tolerance.
+4. **Visible and reviewable.** Accepted results carry `Provenance.method = "vlm_assisted"` with the
+   raw hint and evidence score, and Gate A cannot auto-pass until the user confirms them. Hints
+   without evidence are shown only as dashed suggestions and are never inserted automatically.
+5. **Never for scale or dimensions.** Metric scale always comes from the scale estimators.
+**Alternatives.** (a) Keep "never coordinates": more manual work at Gate A for noisy inputs.
+(b) Accept VLM coordinates directly: violates "measured, never hallucinated".
+**Consequences.** Fewer manual edits at Gate A on hard inputs, while every coordinate in an approved
+PlanGraph is still backed by measured evidence or a human decision. Suggestion accept/reject
+decisions become training data. The eval reports assist rate, acceptance rate and precision of
+accepted assists against the synthetic ground truth.
