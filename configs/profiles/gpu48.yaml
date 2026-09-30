@@ -30,3 +30,9 @@ refine:
   strength_furniture: 0.3
   strength_decor: 0.55
 qa_width: 2048
+runpod_gpu_types:
+- NVIDIA L40S
+- NVIDIA RTX 6000 Ada Generation
+- NVIDIA RTX A6000
+- NVIDIA L40
+- NVIDIA A40

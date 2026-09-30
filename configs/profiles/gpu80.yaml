@@ -30,3 +30,8 @@ refine:
   strength_furniture: 0.3
   strength_decor: 0.55
 qa_width: 2048
+runpod_gpu_types:
+- NVIDIA H100 80GB HBM3
+- NVIDIA H100 PCIe
+- NVIDIA A100-SXM4-80GB
+- NVIDIA A100 80GB PCIe

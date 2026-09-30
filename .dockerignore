@@ -1,0 +1,14 @@
+.git
+.venv
+.venv-*
+**/__pycache__
+**/*.pyc
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.hypothesis
+var
+ui/node_modules
+ui/dist
+deploy/runpod/.env
+*.log

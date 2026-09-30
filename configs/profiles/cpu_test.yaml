@@ -21,3 +21,4 @@ refine:
   strength_furniture: 0.3
   strength_decor: 0.55
 qa_width: 256
+runpod_gpu_types: []

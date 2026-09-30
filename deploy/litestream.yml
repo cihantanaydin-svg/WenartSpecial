@@ -1,0 +1,8 @@
+# Continuous replication of the local SQLite database to the network volume (ADR-S03).
+dbs:
+  - path: /var/lib/archrender/db/archrender.sqlite
+    replicas:
+      - type: file
+        path: /workspace/db/replica
+        sync-interval: 1s
+        retention: 72h

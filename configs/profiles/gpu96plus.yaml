@@ -30,3 +30,9 @@ refine:
   strength_furniture: 0.3
   strength_decor: 0.55
 qa_width: 2048
+runpod_gpu_types:
+- NVIDIA RTX PRO 6000 Blackwell Server Edition
+- NVIDIA H200
+- NVIDIA H100 NVL
+- NVIDIA H200 NVL
+- NVIDIA B200

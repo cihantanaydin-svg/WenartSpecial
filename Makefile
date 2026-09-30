@@ -1,4 +1,5 @@
 SHELL := /bin/bash
+comma := ,
 UV ?= uv
 PY := .venv/bin/python
 BLENDER_VENV := .venv-blender
@@ -53,7 +54,7 @@ schemas:
 	$(UV) run python scripts/export_schemas.py
 
 license-audit:
-	$(UV) run python scripts/license_audit.py
+	$(UV) run python -m archrender.ops.license_audit --prod-only --subprocess-python $(BLENDER_VENV)/bin/python
 
 dev-server:
 	ARCHRENDER_COOKIE_SECURE=false ARCHRENDER_BLENDER_MODE=module $(UV) run uvicorn archrender.api.app:create_app --factory --port 8000
@@ -64,11 +65,25 @@ dev-worker:
 docker-build:
 	docker build -f deploy/Dockerfile -t archrender:dev .
 
+# CPU-only image with the bpy wheel (no CUDA base, no torch). DOCKER_EXTRA_CA=/path/ca.pem adds a
+# corporate/proxy CA for network steps only (BuildKit secret; not stored in the image).
+DOCKER_EXTRA_CA ?=
+UBUNTU_IMAGE := ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
 docker-build-local:
-	docker build -f deploy/Dockerfile --build-arg BLENDER_SOURCE=wheel --build-arg BASE_IMAGE=ubuntu:24.04 -t archrender:local .
+	docker build -f deploy/Dockerfile --build-arg BLENDER_SOURCE=wheel --build-arg APP_EXTRAS= \
+	  --build-arg BASE_IMAGE=$(UBUNTU_IMAGE) --build-arg GIT_COMMIT=$$(git rev-parse --short HEAD) \
+	  $(if $(DOCKER_EXTRA_CA),--secret id=extra_ca$(comma)src=$(DOCKER_EXTRA_CA),) -t archrender:local .
 
+# Uses deploy/runpod/.env when present; otherwise the example with placeholder credentials
+# (secret values are always masked in the output).
+ifneq ($(wildcard deploy/runpod/.env),)
+DRY_RUN_ENV := --env-file deploy/runpod/.env
+else
+DRY_RUN_ENV := --env-file deploy/runpod/.env.example
+DRY_RUN_VARS := GHCR_USERNAME=example GHCR_TOKEN=placeholder HF_TOKEN=placeholder
+endif
 deploy-dry-run:
-	$(PY) deploy/runpod/deploy.py up --dry-run --env-file deploy/runpod/.env.example
+	$(DRY_RUN_VARS) $(UV) run python deploy/runpod/deploy.py up --dry-run $(DRY_RUN_ENV)
 
 clean:
 	rm -rf .pytest_cache .mypy_cache .ruff_cache var/ ui/dist
