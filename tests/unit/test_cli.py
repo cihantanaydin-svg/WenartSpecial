@@ -47,3 +47,51 @@ def test_unreachable_server_gives_an_actionable_error(monkeypatch: pytest.Monkey
     with pytest.raises(ArchRenderClientError) as e:
         client.me()
     assert e.value.code == "UNREACHABLE" and "/healthz" in e.value.fix_hint
+
+
+def _sse(events: list[tuple[int, str, dict[str, object]]]) -> str:
+    import json
+
+    body = "".join(
+        f"id: {i}\nevent: {name}\ndata: {json.dumps(data)}\n\n" for i, name, data in events
+    )
+    return body + "event: end\ndata: {}\n\n"
+
+
+def test_wait_does_not_stop_at_an_already_decided_gate() -> None:
+    """Regression (CI run 1): after `gate approve`, `status --follow` replays the history, which
+    contains the old waiting_gate event; following must continue until the job finishes."""
+    history = [
+        (1, "status", {"status": "running"}),
+        (2, "status", {"status": "waiting_gate", "gate": "D_final"}),
+        (3, "status", {"status": "queued"}),
+        (4, "status", {"status": "running"}),
+        (5, "status", {"status": "succeeded"}),
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/events"):
+            return httpx.Response(
+                200, text=_sse(history), headers={"content-type": "text/event-stream"}
+            )
+        return httpx.Response(200, json={"id": "job_1", "status": "succeeded"})
+
+    http = httpx.Client(base_url="http://h", transport=httpx.MockTransport(handler))
+    seen: list[int] = []
+    job = ArchRenderClient("http://h", http=http).wait("job_1", lambda e: seen.append(e["id"]))
+    assert job["status"] == "succeeded" and seen == [1, 2, 3, 4, 5]
+
+
+def test_wait_stops_at_a_pending_gate() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/events"):
+            events = [(1, "status", {"status": "waiting_gate"}), (2, "heartbeat", {})]
+            return httpx.Response(
+                200, text=_sse(events), headers={"content-type": "text/event-stream"}
+            )
+        return httpx.Response(200, json={"id": "job_1", "status": "waiting_gate"})
+
+    http = httpx.Client(base_url="http://h", transport=httpx.MockTransport(handler))
+    seen: list[int] = []
+    job = ArchRenderClient("http://h", http=http).wait("job_1", lambda e: seen.append(e["id"]))
+    assert job["status"] == "waiting_gate" and seen == [1]

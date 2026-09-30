@@ -226,6 +226,8 @@ class ArchRenderClient:
                 stop_at_gate
                 and ev.get("event") == "status"
                 and ev["data"].get("status") == "waiting_gate"
+                # the stream replays history: a gate that was already decided must not stop us
+                and self.get_job(job_id)["status"] == "waiting_gate"
             ):
                 break
         return self.get_job(job_id)
