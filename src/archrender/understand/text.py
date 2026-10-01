@@ -109,6 +109,12 @@ def parse_dimension(text: str, *, unit_hint: str | None = None) -> Dimension | N
     chosen = unit if unit is not None else unit_hint
     if chosen is not None:
         return Dimension(text.strip(), (v * factor[chosen],), chosen)
+    if re.fullmatch(r"\d{1,3}[.,]\d{3}", t):
+        # "1.234": 1.234 m, or 1234 mm (the same length), or 1234 cm
+        return Dimension(text.strip(), (v, v * 10.0), "ambiguous")
+    if _THOUSANDS.fullmatch(t):
+        # "1.234,5" / "1,234.5" / "12 345": a large count of mm (or cm), never metres
+        return Dimension(text.strip(), (v / 1000.0, v / 100.0), "ambiguous")
     has_decimals = bool(re.search(r"[.,]\d{1,2}$", t))
     if has_decimals and v < 100:
         return Dimension(text.strip(), (v,), "m")  # "3,50" → 3.5 m
@@ -117,6 +123,9 @@ def parse_dimension(text: str, *, unit_hint: str | None = None) -> Dimension | N
     if not has_decimals:
         return Dimension(text.strip(), (v / 100.0, v / 1000.0), "ambiguous")  # cm first ("350")
     return Dimension(text.strip(), (v,), "m")
+
+
+_THOUSANDS = re.compile(r"\d{1,3}(?:([.,\s])\d{3})+(?:(?!\1)[.,]\d+)?")
 
 
 _SCALE_RATIO = re.compile(r"(?<![\d/])1\s*[:/]\s*(\d{1,5})(?![\d/])")

@@ -21,12 +21,14 @@ from archrender.core.schemas.common import ModelRef, Strict
 from archrender.core.schemas.document import PageRef, Word
 from archrender.core.schemas.provenance import Fact, Method
 from archrender.core.schemas.understanding import Classification, NorthArrow, Schedule, TitleBlock
-from archrender.ingest.intake import page_refs
+from archrender.ingest.intake import page_refs, tiles
+from archrender.ingest.tasks import PREVIEW_PX
 from archrender.pipeline.engine import StageContext, StageDef, StageEngine
 from archrender.pipeline.services import Services
 from archrender.understand.classify import REVIEW_THRESHOLD, PageClassifier, combine_with_vlm
 from archrender.understand.features import vector_of
 from archrender.understand.page import analyse
+from archrender.understand.rectify import find_sheet, rectify
 from archrender.understand.schedules import link_rows, rows_from_words, schedule_from_rows
 from archrender.understand.tags import TagHit
 
@@ -51,6 +53,9 @@ class S1Out(Strict):
     north: NorthArrow | None
     tags: list[dict[str, Any]]
     notes: list[str]
+    # phone photo of a sheet: the rectified sheet (words, tags and title block are in its pixels)
+    rectified: CasRef | None = None
+    rectification: dict[str, Any] | None = None
 
 
 def _rgb(store: Any, ref: CasRef) -> np.ndarray:
@@ -134,12 +139,51 @@ def build_s1(svc: Services) -> StageDef[S1In, S1Out]:
         preview = _rgb(store, CasRef.model_validate(preview_ref)) if preview_ref else None
         text_layer = [Word.model_validate(w) for w in (_json(store, page.words) or [])]
         ocr_impl, ocr_entry = svc.models.get_with_fallback("ocr", "S1")
+        page_tiles, dpi = page.tiles, page.dpi or 300.0
+        rect_ref, rect_info, rect_notes = None, None, []
+        if page.kind == "image":
+            quad = find_sheet(rgb)
+            if quad is not None:
+                r = rectify(rgb, quad)
+                rgb = r.image
+                hh, ww = rgb.shape[:2]
+                buf = io.BytesIO()
+                Image.fromarray(rgb).save(buf, "PNG")
+                rect_ref = store.put_bytes(buf.getvalue(), "image/png", f"{page.id}_rectified.png")
+                small = Image.fromarray(rgb)
+                small.thumbnail((PREVIEW_PX, PREVIEW_PX), Image.Resampling.LANCZOS)
+                preview = np.asarray(small)
+                page_tiles = tiles(ww, hh, svc.settings.tile_px, svc.settings.tile_overlap)
+                # the sheet's physical size is unknown; symbol sizes assume an A3 sheet
+                dpi = max(ww, hh) / (420.0 / 25.4)
+                rect_info = {
+                    "h": r.h.tolist(),
+                    "corners_px": quad.corners.round(2).tolist(),
+                    "corners_in_frame": quad.corners_in_frame,
+                    "coverage": round(quad.coverage, 4),
+                    "fit_rms_px": round(quad.fit_rms_px, 3),
+                    "aspect": round(r.aspect, 5),
+                    "aspect_source": r.aspect_source,
+                    "width_px": ww,
+                    "height_px": hh,
+                    "symbol_dpi_assumed": round(dpi, 1),
+                }
+                rect_notes.append(
+                    "photo of a sheet: rectified ("
+                    + (
+                        "ISO 216 aspect assumed"
+                        if r.aspect_source == "iso216"
+                        else "measured aspect"
+                    )
+                    + ("; a corner is outside the photo" if not quad.corners_in_frame else "")
+                    + "); its physical size is unknown, so the scale comes from dimensions"
+                )
         a = analyse(
             page.id,
             rgb,
-            dpi=page.dpi or 300.0,
+            dpi=dpi,
             text_layer=text_layer or None,
-            tiles=page.tiles,
+            tiles=page_tiles,
             ocr=ocr_impl,
             ocr_name=ocr_entry.name,
             langs=inp.langs,
@@ -196,12 +240,14 @@ def build_s1(svc: Services) -> StageDef[S1In, S1Out]:
                 {"tag": t.tag, "kind": t.kind, "bbox": list(t.bbox), "source": t.source}
                 for t in a.tags
             ],
-            notes=a.notes,
+            notes=rect_notes + a.notes,
+            rectified=rect_ref,
+            rectification=rect_info,
         )
 
     return StageDef(
         "S1_understand",
-        "1",
+        "2",
         S1Out,
         run,
         config=lambda: {

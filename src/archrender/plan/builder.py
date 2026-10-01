@@ -32,6 +32,7 @@ from typing import Literal
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.spatial import cKDTree
 from shapely.geometry import LineString, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
@@ -210,7 +211,9 @@ def _inside(rings: dict[str, list[Polygon]], group: str, p: NDArray[np.float64])
     return sum(1 for g in polys if g.contains(pt)) % 2 == 1
 
 
-def _pairs(segs: _Segs, rings: dict[str, list[Polygon]]) -> list[Piece]:
+def _pairs(segs: _Segs, rings: dict[str, list[Polygon]], res: float = 0.0) -> list[Piece]:
+    """``res``: positional uncertainty of the evidence (metres); the direction of a short raster
+    segment is only known to about atan(2·res / length)."""
     n = len(segs)
     if n == 0:
         return []
@@ -224,26 +227,27 @@ def _pairs(segs: _Segs, rings: dict[str, list[Polygon]]) -> list[Piece]:
     ang_sorted = ang[order]
     best: dict[tuple[int, int], list[tuple[float, int]]] = {}  # (i, side) → [(distance, j)]
     for i in range(n):
-        lo = np.searchsorted(ang_sorted, ang[i] - ANGLE_TOL)
-        hi = np.searchsorted(ang_sorted, ang[i] + ANGLE_TOL, side="right")
+        tol = min(ANGLE_TOL + math.atan2(2 * res, length[i]), math.radians(6.0))
+        lo = np.searchsorted(ang_sorted, ang[i] - tol)
+        hi = np.searchsorted(ang_sorted, ang[i] + tol, side="right")
         cand = list(order[lo:hi])
-        if ang[i] < ANGLE_TOL:  # wrap around 0/π
-            cand += list(order[np.searchsorted(ang_sorted, math.pi - ANGLE_TOL + ang[i]) :])
-        if ang[i] > math.pi - ANGLE_TOL:
-            cand += list(
-                order[: np.searchsorted(ang_sorted, ang[i] + ANGLE_TOL - math.pi, side="right")]
-            )
+        if ang[i] < tol:  # wrap around 0/π
+            cand += list(order[np.searchsorted(ang_sorted, math.pi - tol + ang[i]) :])
+        if ang[i] > math.pi - tol:
+            cand += list(order[: np.searchsorted(ang_sorted, ang[i] + tol - math.pi, side="right")])
         for j in cand:
             if j == i:
                 continue
-            off = float(np.dot(nrm[i], mid[j] - segs.a[i]))
-            dist = abs(off)
+            side = float(np.dot(nrm[i], mid[j] - segs.a[i]))
+            # measured on the longer segment's line (a short raster segment's direction is noisy)
+            r, q = (i, j) if length[i] >= length[j] else (j, i)
+            dist = abs(float(np.dot(nrm[r], mid[q] - segs.a[r])))
             if not MIN_T <= dist <= MAX_T:
                 continue
-            # the other segment must be parallel along its whole length
-            e0 = float(np.dot(nrm[i], segs.a[j] - segs.a[i]))
-            e1 = float(np.dot(nrm[i], segs.b[j] - segs.a[i]))
-            if abs(e0 - e1) > 0.01 + 0.01 * length[j]:
+            # the shorter segment must be parallel to the longer one along its whole length
+            e0 = float(np.dot(nrm[r], segs.a[q] - segs.a[r]))
+            e1 = float(np.dot(nrm[r], segs.b[q] - segs.a[r]))
+            if abs(e0 - e1) > 0.01 + 0.01 * length[q] + 2 * res:
                 continue
             t0 = float(np.dot(u[i], segs.a[j] - segs.a[i]))
             t1 = float(np.dot(u[i], segs.b[j] - segs.a[i]))
@@ -251,7 +255,7 @@ def _pairs(segs: _Segs, rings: dict[str, list[Polygon]]) -> list[Piece]:
             overlap = hi_t - lo_t
             if overlap < 0.03 or (overlap < 0.5 * min(length[i], length[j]) and overlap < 0.2):
                 continue
-            best.setdefault((i, 1 if off > 0 else -1), []).append((dist, j))
+            best.setdefault((i, 1 if side > 0 else -1), []).append((dist, j))
     pieces: list[Piece] = []
     seen: set[tuple[int, int]] = set()
     partners = []
@@ -264,17 +268,18 @@ def _pairs(segs: _Segs, rings: dict[str, list[Polygon]]) -> list[Piece]:
         if k in seen:
             continue
         seen.add(k)
-        t0 = float(np.dot(u[i], segs.a[j] - segs.a[i]))
-        t1 = float(np.dot(u[i], segs.b[j] - segs.a[i]))
-        lo_t, hi_t = max(0.0, min(t0, t1)), min(length[i], max(t0, t1))
-        off = float(np.dot(nrm[i], mid[j] - segs.a[i]))
-        pa = segs.a[i] + u[i] * lo_t + nrm[i] * off / 2
-        pb = segs.a[i] + u[i] * hi_t + nrm[i] * off / 2
+        r, q = (i, j) if length[i] >= length[j] else (j, i)  # the piece runs along the longer face
+        t0 = float(np.dot(u[r], segs.a[q] - segs.a[r]))
+        t1 = float(np.dot(u[r], segs.b[q] - segs.a[r]))
+        lo_t, hi_t = max(0.0, min(t0, t1)), min(length[r], max(t0, t1))
+        off = float(np.dot(nrm[r], mid[q] - segs.a[r]))
+        pa = segs.a[r] + u[r] * lo_t + nrm[r] * off / 2
+        pb = segs.a[r] + u[r] * hi_t + nrm[r] * off / 2
         if float(np.hypot(*(pb - pa))) < 0.5 * dist:
             continue  # a cap or jamb facing a far face, not a wall
         # the strip between the faces must be wall body (when the source has filled/closed outlines)
         if any(
-            _inside(rings, segs.group[i], pa + (pb - pa) * f) is False for f in (0.25, 0.5, 0.75)
+            _inside(rings, segs.group[r], pa + (pb - pa) * f) is False for f in (0.25, 0.5, 0.75)
         ):
             continue
         pieces.append(Piece(pa, pb, dist))
@@ -369,8 +374,8 @@ def _arc_walls(pieces: list[Piece]) -> tuple[list[BWall], list[Piece]]:
     return walls, rest
 
 
-def _merge(pieces: list[Piece]) -> list[BWall]:
-    """Collinear pieces of equal thickness → walls with gaps."""
+def _merge(pieces: list[Piece], res: float = 0.0) -> list[BWall]:
+    """Collinear pieces of equal thickness → walls with gaps (``res``: positional uncertainty)."""
     clusters: list[list[Piece]] = []
     keys: list[tuple[NDArray[np.float64], float, float]] = []  # (u, offset, t)
     for p in sorted(pieces, key=lambda q: -q.length):
@@ -381,9 +386,10 @@ def _merge(pieces: list[Piece]) -> list[BWall]:
         off = float(np.dot(nrm, p.a))
         for k, (ku, koff, kt) in enumerate(keys):
             if (
-                abs(float(ku[0] * u[1] - ku[1] * u[0])) < math.sin(math.radians(0.8))
-                and abs(float(np.dot(np.array([-ku[1], ku[0]]), p.a)) - koff) < 0.025
-                and abs(kt - p.t) < 0.025
+                abs(float(ku[0] * u[1] - ku[1] * u[0]))
+                < math.sin(math.radians(0.8) + math.atan2(2 * res, p.length))
+                and abs(float(np.dot(np.array([-ku[1], ku[0]]), p.a)) - koff) < 0.025 + res
+                and abs(kt - p.t) < 0.025 + 2 * res
             ):
                 clusters[k].append(p)
                 break
@@ -596,8 +602,58 @@ def _junction_cover(w: BWall, g0: float, g1: float, walls: list[BWall]) -> float
     return covered
 
 
+def _stroke_index(prims: Prims, step: float = 0.01) -> cKDTree | None:
+    """Points every ``step`` along the open strokes and arcs (symbol evidence)."""
+    pts: list[NDArray[np.float64]] = []
+    for p in prims.polylines:
+        if p.role == "wall" or p.clip or p.closed or len(p.pts) < 2:
+            continue
+        for a, b in p.segments():
+            n = max(1, int(float(np.hypot(*(b - a))) / step))
+            f = np.linspace(0.0, 1.0, n + 1)[:, None]
+            pts.append(a + (b - a) * f)
+    for arc in prims.arcs:
+        n = max(2, int(math.radians(arc.sweep) * arc.r / step))
+        pts.append(np.array([arc.point(k / n) for k in range(n + 1)]))
+    if not pts:
+        return None
+    return cKDTree(np.vstack(pts))
+
+
+def _swing_evidence(
+    w: BWall, g0: float, g1: float, tree: cKDTree, res: float
+) -> tuple[Literal["start", "end"], Literal["pos", "neg"], float] | None:
+    """The door hypothesis (hinge end, swing side) whose leaf and quarter-circle swing are best
+    covered by drawn strokes: works when the swing arc is broken into short pieces (tag bubbles
+    drawn across it, scan noise)."""
+    width = g1 - g0
+    tol = 0.03 + 2 * res
+    best: tuple[Literal["start", "end"], Literal["pos", "neg"], float] | None = None
+    theta = np.radians(np.linspace(15, 75, 13))
+    leaf_t = np.linspace(0.3, 0.9, 7)
+    for hinge in ("start", "end"):
+        h0 = w.at(g0) if hinge == "start" else w.at(g1)
+        closed = w.u if hinge == "start" else -w.u
+        for side in ("pos", "neg"):
+            n = w.n if side == "pos" else -w.n
+            for lift in (0.0, w.t / 2):  # hinge on the centerline or on the swing-side face
+                h = h0 + n * lift
+                arc = h + width * (np.cos(theta)[:, None] * closed + np.sin(theta)[:, None] * n)
+                leaf = h + width * leaf_t[:, None] * n
+                da, _ = tree.query(arc)
+                dl, _ = tree.query(leaf)
+                cov_a = float((da <= tol).mean())
+                cov_l = float((dl <= tol).mean())
+                if cov_a >= 0.6 and cov_l >= 0.5:
+                    score = cov_a + cov_l
+                    if best is None or score > best[2]:
+                        best = (hinge, side, score)
+    return best
+
+
 def _openings(walls: list[BWall], prims: Prims) -> tuple[list[_Opening], int]:
     arcs = _door_arcs(prims)
+    tree = _stroke_index(prims)
     syms = _symbol_segments(prims)
     sym_a = np.array([a for a, _ in syms]).reshape(-1, 2)
     sym_b = np.array([b for _, b in syms]).reshape(-1, 2)
@@ -637,17 +693,22 @@ def _openings(walls: list[BWall], prims: Prims) -> tuple[list[_Opening], int]:
                 side = "pos" if float(np.dot(w.n, np.array([mx, my]) - w.at(mid))) > 0 else "neg"
                 conf = 0.9
                 break
+            if kind == "opening" and tree is not None and 0.5 <= width <= 1.6:
+                ev = _swing_evidence(w, g0, g1, tree, prims.resolution)
+                if ev is not None:
+                    kind, hinge, side, conf = "door", ev[0], ev[1], 0.8
             if kind == "opening" and len(sym_a):
-                # window: ≥ 2 thin lines along the gap inside the wall band
+                # window: ≥ 2 thin lines along the gap inside the wall band (a line drawn in
+                # pieces counts once: the pieces at one offset are united)
                 d = sym_b - sym_a
                 lens = np.hypot(d[:, 0], d[:, 1])
-                ok = lens > 0.5 * width
+                ok = lens > 0.05
                 if ok.any():
                     uu = d[ok] / lens[ok, None]
                     par = np.abs(uu @ w.u) > math.cos(math.radians(2))
                     am = sym_a[ok][par]
                     bm = sym_b[ok][par]
-                    count = 0
+                    lines: list[tuple[float, list[tuple[float, float]]]] = []
                     for a, b in zip(am, bm, strict=True):
                         off_a = float(np.dot(w.n, a - w.p0))
                         off_b = float(np.dot(w.n, b - w.p0))
@@ -656,8 +717,25 @@ def _openings(walls: list[BWall], prims: Prims) -> tuple[list[_Opening], int]:
                         s_a, s_b = sorted(
                             (float(np.dot(w.u, a - w.p0)), float(np.dot(w.u, b - w.p0)))
                         )
-                        cover = min(s_b, g1) - max(s_a, g0)
-                        if cover >= 0.8 * width:
+                        lo, hi = max(s_a, g0), min(s_b, g1)
+                        if hi <= lo:
+                            continue
+                        off = (off_a + off_b) / 2
+                        for o_k, spans in lines:
+                            if abs(o_k - off) <= 0.02:
+                                spans.append((lo, hi))
+                                break
+                        else:
+                            lines.append((off, [(lo, hi)]))
+                    count = 0
+                    for _, spans in lines:
+                        covered, end = 0.0, g0
+                        for lo, hi in sorted(spans):
+                            lo = max(lo, end)
+                            if hi > lo:
+                                covered += hi - lo
+                                end = hi
+                        if covered >= 0.8 * width:
                             count += 1
                     if count >= 2:
                         kind = "window"
@@ -795,9 +873,9 @@ def build_plan(
     notes = list(prims.notes)
     segs, rings, mode = _evidence(prims)
     notes.append(f"wall evidence: {mode} ({len(segs)} segments)")
-    pieces = _pairs(segs, rings)
+    pieces = _pairs(segs, rings, prims.resolution)
     arc_walls, rest = _arc_walls(pieces)
-    walls = _merge(rest) + arc_walls
+    walls = _merge(rest, prims.resolution) + arc_walls
     # keep the connected network(s) of walls: isolated strips (scale bars, frames) are not walls
     walls = _main_network(walls)
     _close_junctions(walls)
@@ -917,7 +995,9 @@ def _solid(w: BWall) -> Polygon:
 def _main_network(walls: list[BWall]) -> list[BWall]:
     if len(walls) <= 1:
         return walls
-    geoms = [_solid(w).buffer(0.05) for w in walls]
+    # pieces stop short of the junctions they run into (rounded or noisy corners), so walls
+    # within about half their thickness of each other are connected
+    geoms = [_solid(w).buffer(max(0.05, 0.6 * w.t)) for w in walls]
     parent = list(range(len(walls)))
 
     def find(i: int) -> int:

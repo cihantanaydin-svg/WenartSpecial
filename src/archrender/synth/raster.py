@@ -234,16 +234,35 @@ def phone_photo(
     out = np.clip(img, 0, 255).astype(np.uint8)
     full_h = np.asarray(hmat, np.float64) @ np.diag([200.0 / GT_DPI, 200.0 / GT_DPI, 1.0])
     crop = crop_corner if crop_corner is not None else bool(rng.random() < 0.15)
-    if crop:  # one paper corner outside the frame
+    if crop:  # one paper corner outside the frame (cut along one axis; all four sides stay
+        # partly visible, as when the photographer frames the sheet a little too tightly)
         k = int(rng.integers(4))
-        dx = int(max(0.0, corners[k, 0] + 60)) if corners[k, 0] < w / 2 else 0
-        dy = int(max(0.0, corners[k, 1] + 60)) if corners[k, 1] < h / 2 else 0
-        x1 = w if corners[k, 0] < w / 2 else int(min(w, corners[k, 0] - 60))
-        y1 = h if corners[k, 1] < h / 2 else int(min(h, corners[k, 1] - 60))
-        out = np.ascontiguousarray(out[dy:y1, dx:x1])
-        shift = np.array([[1, 0, -dx], [0, 1, -dy], [0, 0, 1]], np.float64)
-        full_h = shift @ full_h
-        corners = corners - np.array([dx, dy])
+        axis = int(rng.integers(2))
+        window = None
+        for ax in (axis, 1 - axis):
+            lo = [0, 0]
+            hi = [w, h]
+            if corners[k, ax] < (w, h)[ax] / 2:
+                lo[ax] = int(corners[k, ax] + 60)
+            else:
+                hi[ax] = int(corners[k, ax] - 60)
+            others = np.delete(corners, k, axis=0)
+            if (
+                (others[:, 0] >= lo[0] + 40).all()
+                and (others[:, 0] <= hi[0] - 40).all()
+                and (others[:, 1] >= lo[1] + 40).all()
+                and (others[:, 1] <= hi[1] - 40).all()
+            ):
+                window = (lo, hi)
+                break
+        if window is not None:
+            (dx, dy), (x1, y1) = window
+            out = np.ascontiguousarray(out[dy:y1, dx:x1])
+            shift = np.array([[1, 0, -dx], [0, 1, -dy], [0, 0, 1]], np.float64)
+            full_h = shift @ full_h
+            corners = corners - np.array([dx, dy])
+        else:
+            crop = False
     maker, model = PHONES[int(rng.integers(len(PHONES)))]
     exif = Image.Exif()
     exif[0x010F] = maker

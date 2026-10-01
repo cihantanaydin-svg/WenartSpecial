@@ -199,7 +199,9 @@ def from_layout(
     variant: Variant = "manhattan",
     rng: np.random.Generator | None = None,
     level_name: str = "Zemin Kat",
+    thickness: tuple[float, float] | None = None,
 ) -> PlanSpec:
+    """``thickness`` = (exterior, interior) overrides the layout's wall thicknesses."""
     rng = rng or np.random.default_rng(0)
     theta = 0.0
     phi = math.pi / 2
@@ -215,7 +217,12 @@ def from_layout(
     spec = PlanSpec([], [], [], variant, e1, e2, level_name=level_name, layout=layout)
     for w in layout.walls:
         spec.walls.append(
-            SWall(spec.lattice(w.ax, w.ay), spec.lattice(w.bx, w.by), w.thickness, w.exterior)
+            SWall(
+                spec.lattice(w.ax, w.ay),
+                spec.lattice(w.bx, w.by),
+                thickness[0 if w.exterior else 1] if thickness else w.thickness,
+                w.exterior,
+            )
         )
     for o in layout.openings:
         spec.openings.append(
@@ -293,17 +300,24 @@ def add_loft_features(spec: PlanSpec) -> None:
             spec.islands.append(Island(r.id, [spec.lattice(x, y) for x, y in corners]))
 
 
+EXT_THICKNESS = (0.20, 0.25, 0.30)
+INT_THICKNESS = (0.10, 0.12, 0.15)
+
+
 def random_spec(
     rng: np.random.Generator, *, variant: Variant | None = None, english: bool = False
 ) -> PlanSpec:
     v: Variant = variant or str(  # type: ignore[assignment]
         rng.choice(["manhattan", "manhattan", "rotated", "skewed", "arc"])
     )
+    layout = random_layout(rng, english=english)
+    thickness = (float(rng.choice(EXT_THICKNESS)), float(rng.choice(INT_THICKNESS)))
     return from_layout(
-        random_layout(rng, english=english),
+        layout,
         variant=v,
         rng=rng,
         level_name="Ground Floor" if english else "Zemin Kat",
+        thickness=thickness,
     )
 
 

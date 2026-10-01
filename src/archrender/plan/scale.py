@@ -62,6 +62,8 @@ def from_dimensions(pairs: list[tuple[float, tuple[float, ...]]]) -> ScaleEstima
     if not pairs:
         return None
     ratios = sorted({v / m for m, vs in pairs for v in vs if v > 0})
+    if not ratios:
+        return None
     best: tuple[int, float, list[float]] | None = None
     for r in ratios:
         inl = []
@@ -75,8 +77,9 @@ def from_dimensions(pairs: list[tuple[float, tuple[float, ...]]]) -> ScaleEstima
     assert best is not None
     n, _, inl = best
     value = float(np.median(inl))
-    mad = float(np.median(np.abs(np.array(inl) - value))) / value if n > 1 else 0.03
-    sigma = max(0.002, 1.4826 * mad / math.sqrt(n)) if n > 1 else 0.03
+    mad = float(np.median(np.abs(np.array(inl) - value))) / value if n > 1 else 0.0
+    # one string is weak evidence (a misread digit goes unnoticed): never "precise" on its own
+    sigma = max(0.002, 1.4826 * mad / math.sqrt(n)) if n > 1 else 0.08
     return ScaleEstimate(
         value, sigma, "dimensions", n, f"{n} of {len(pairs)} dimension strings agree"
     )

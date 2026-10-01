@@ -81,6 +81,7 @@ class Prims:
     texts: list[TextPrim] = field(default_factory=list)
     dims: list[DimPrim] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    resolution: float = 0.0  # positional uncertainty in metres (one pixel for rasters; 0 = exact)
 
 
 def circle_fit(pts: NDArray[np.float64]) -> tuple[float, float, float, float]:

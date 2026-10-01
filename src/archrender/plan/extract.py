@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 
 from archrender.core.schemas.document import Word
-from archrender.core.schemas.provenance import Fact, fact
+from archrender.core.schemas.provenance import Fact, Method, fact
 from archrender.plan.prims import ArcPrim, DimPrim, Polyline, Prims, TextPrim
 
 # order matters: pattern/hatch layers named after walls ("A-WALL-PATT") are not walls
@@ -153,8 +153,11 @@ def dxf_extract(entities: dict[str, Any], summary: dict[str, Any], doc_id: str) 
     return Extracted(prims, [[k, 0.0, -ox], [0.0, k, -oy]], unit, notes)
 
 
-def pdf_extract(paths: dict[str, Any], words: list[Word], m_per_px: float) -> Extracted:
-    """Page pixels (y down) → plan metres (y up) at ``m_per_px``; origin at the drawing's corner."""
+def pdf_extract(
+    paths: dict[str, Any], words: list[Word], m_per_px: float, method: Method = "pdf_vector"
+) -> Extracted:
+    """Page pixels (y down) → plan metres (y up) at ``m_per_px``; origin at the drawing's corner.
+    Also reads the raster vectoriser's output (same layout, ``method="raster_cv"``)."""
     all_x = [q[0] for p in paths.get("paths", []) for s in p["sub"] for q in s]
     all_y = [q[1] for p in paths.get("paths", []) for s in p["sub"] for q in s]
     ox = math.floor(min(all_x) * m_per_px) if all_x else 0.0
@@ -163,7 +166,7 @@ def pdf_extract(paths: dict[str, Any], words: list[Word], m_per_px: float) -> Ex
     def tx(x: float, y: float) -> tuple[float, float]:
         return x * m_per_px - ox, -y * m_per_px - oy
 
-    prims = Prims(method="pdf_vector")
+    prims = Prims(method=method, resolution=m_per_px if method == "raster_cv" else 0.0)
     for i, p in enumerate(paths.get("paths", [])):
         for sub, closed, curve in zip(p["sub"], p["closed"], p["curve"], strict=True):
             pts = np.array([tx(*q) for q in sub], np.float64)
@@ -185,6 +188,6 @@ def pdf_extract(paths: dict[str, Any], words: list[Word], m_per_px: float) -> Ex
     for w in words:
         x, y = tx((w.x0 + w.x1) / 2, (w.y0 + w.y1) / 2)
         h = (w.y1 - w.y0) * m_per_px if w.angle_deg in (0.0, 180.0) else (w.x1 - w.x0) * m_per_px
-        prims.texts.append(TextPrim(w.text, x, y, h, w.angle_deg, "pdf_text"))
+        prims.texts.append(TextPrim(w.text, x, y, h, w.angle_deg, w.source or method))
     unit = fact(m_per_px, "derived", 0.9, note="metres per page pixel from the scale estimate")
     return Extracted(prims, [[m_per_px, 0.0, -ox], [0.0, -m_per_px, -oy]], unit, [])

@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 from shapely.geometry import Polygon, box
 
-from archrender.synth.layout import EXT_T, INT_T, random_layout
-from archrender.synth.plan import from_layout, gt_plan, random_spec
+from archrender.synth.layout import random_layout
+from archrender.synth.plan import EXT_THICKNESS, INT_THICKNESS, from_layout, gt_plan, random_spec
 
 
 def _half_thickness(layout, x: float, y: float, horizontal: bool) -> float:  # type: ignore[no-untyped-def]
@@ -86,5 +86,6 @@ def test_arc_wall_geometry_and_ground_truth_plan(seed: int) -> None:
         assert room.area_label_m2 is not None
         assert poly.area == pytest.approx(room.area_label_m2.value, abs=0.006)
     ext = [x for x in plan.walls if x.kind == "exterior"]
-    assert {x.thickness_m.value for x in ext} == {EXT_T}
-    assert {x.thickness_m.value for x in plan.walls if x.kind == "interior"} <= {INT_T}
+    t_ext = {x.thickness_m.value for x in ext}
+    assert len(t_ext) == 1 and t_ext <= set(EXT_THICKNESS)  # one facade thickness
+    assert {x.thickness_m.value for x in plan.walls if x.kind == "interior"} <= set(INT_THICKNESS)
