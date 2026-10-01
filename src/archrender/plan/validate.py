@@ -5,7 +5,9 @@ from __future__ import annotations
 import itertools
 from collections import deque
 
-from shapely.geometry import Point, Polygon
+from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry.base import BaseGeometry
+from shapely.ops import unary_union
 
 from archrender.core.schemas.common import Point2, Severity
 from archrender.core.schemas.plan import PlanGraph, Segment, ValidationIssue
@@ -26,6 +28,7 @@ def _pt(x: float, y: float) -> Point2:
 def validate_plan(plan: PlanGraph) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     issues += _rooms(plan)
+    issues += _enclosure(plan)
     issues += _walls(plan)
     issues += _openings(plan)
     issues += _reachability(plan)
@@ -102,6 +105,50 @@ def _rooms(plan: PlanGraph) -> list[ValidationIssue]:
                         location=_pt(c.x, c.y),
                     )
                 )
+    return out
+
+
+OPEN_TOLERANCE_M = 0.03
+MIN_OPEN_RUN_M = 0.10
+
+
+def _enclosure(plan: PlanGraph) -> list[ValidationIssue]:
+    """A room's boundary must run along walls (openings are in walls): a part of it with no wall
+    is an open room (a deleted or missing wall, a leak into the neighbour)."""
+    by_level: dict[str, BaseGeometry] = {}
+    for lvl in {w.level for w in plan.walls}:
+        bodies = [
+            LineString(centerline_coords(w)).buffer(
+                w.thickness_m.value / 2 + OPEN_TOLERANCE_M, cap_style="flat"
+            )
+            for w in plan.walls
+            if w.level == lvl
+        ]
+        # flat caps leave the corner squares of L-junctions out: close them
+        by_level[lvl] = unary_union(bodies).buffer(OPEN_TOLERANCE_M).buffer(-OPEN_TOLERANCE_M)
+    out: list[ValidationIssue] = []
+    for r in plan.rooms:
+        body = by_level.get(r.level)
+        ring = LineString([(p.x, p.y) for p in [*r.polygon, r.polygon[0]]])
+        bare = ring if body is None else ring.difference(body)
+        if bare.is_empty or bare.length < MIN_OPEN_RUN_M:
+            continue
+        parts = list(getattr(bare, "geoms", [bare]))
+        longest = max(parts, key=lambda g: g.length)
+        c = longest.interpolate(0.5, normalized=True)
+        out.append(
+            ValidationIssue(
+                code="ROOM_OPEN",
+                severity=Severity.ERROR,
+                message=(
+                    f"Room {r.name.value} ({r.id}) is not enclosed: {bare.length:.2f} m of its "
+                    "boundary has no wall."
+                ),
+                fix_hint="Draw the missing wall (Gate A), or merge the room with its neighbour.",
+                element_ids=[r.id],
+                location=_pt(c.x, c.y),
+            )
+        )
     return out
 
 
