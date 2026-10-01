@@ -24,6 +24,7 @@ from archrender.pipeline.gates import GateWait
 from archrender.pipeline.queue import LeaseLost
 from archrender.pipeline.run import RunOrchestrator
 from archrender.pipeline.services import Services
+from archrender.plan.stage import has_plan_source, run_plan_job
 from archrender.understand.stage import run_understanding
 
 log = get_logger(__name__)
@@ -133,6 +134,15 @@ class Worker:
             status = self.svc.queue.get(job.id).status.value
             self.svc.db.execute("UPDATE runs SET status = ? WHERE job_id = ?", (status, job.id))
 
+    def _follow_up(self, job: Job, kind: JobKind) -> None:
+        """Queue ``kind`` for the project unless one is already waiting (one suffices: it reads
+        the project's current state when it runs)."""
+        if not self.svc.db.one(
+            "SELECT 1 FROM jobs WHERE project_id = ? AND kind = ? AND status = 'queued'",
+            (job.project_id, kind.value),
+        ):
+            self.svc.queue.enqueue(job.project_id, kind, "gpu", {}, created_by=job.created_by)
+
     def _dispatch(self, job: Job, hb: _Heartbeat) -> dict[str, Any]:
         def cancelled() -> bool:
             return hb.lost.is_set() or self.svc.queue.cancel_requested(job.id)
@@ -146,30 +156,24 @@ class Worker:
 
         if job.kind == JobKind.INTAKE:
             result = run_intake(self.svc, str(job.payload["upload_id"]))
-            # S1 for the project's pages (unchanged pages are cache hits); one pending job suffices
-            if not self.svc.db.one(
-                "SELECT 1 FROM jobs WHERE project_id = ? AND kind = 'understand' AND status = 'queued'",
-                (job.project_id,),
-            ):
-                self.svc.queue.enqueue(
-                    job.project_id, JobKind.UNDERSTAND, "gpu", {}, created_by=job.created_by
-                )
+            # S1 for the project's pages (unchanged pages are cache hits)
+            self._follow_up(job, JobKind.UNDERSTAND)
             return result
+        ctx = StageContext(
+            project_id=job.project_id,
+            store=self.svc.store(job.project_id),
+            progress=progress,
+            cancelled=cancelled,
+        )
         if job.kind == JobKind.UNDERSTAND:
-            ctx = StageContext(
-                project_id=job.project_id,
-                store=self.svc.store(job.project_id),
-                progress=progress,
-                cancelled=cancelled,
-            )
-            return run_understanding(self.svc, ctx)
+            result = run_understanding(self.svc, ctx)
+            # S2: the draft plan for Gate A, once there is something to extract it from
+            if has_plan_source(self.svc, job.project_id):
+                self._follow_up(job, JobKind.PLAN)
+            return result
+        if job.kind == JobKind.PLAN:
+            return run_plan_job(self.svc, ctx)
         if job.kind == JobKind.RUN:
-            ctx = StageContext(
-                project_id=job.project_id,
-                store=self.svc.store(job.project_id),
-                progress=progress,
-                cancelled=cancelled,
-            )
             return RunOrchestrator(self.svc, job.id, str(job.payload["run_id"]), ctx).execute()
         raise ArchRenderError(
             ErrorCode.VALIDATION,

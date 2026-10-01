@@ -64,6 +64,7 @@ class RasterVectors:
     notes: list[str] = field(default_factory=list)
     debug: dict[str, NDArray[Any]] = field(default_factory=dict)
     body: NDArray[np.bool_] | None = None  # wall body mask (page px)
+    ink: NDArray[np.bool_] | None = None  # drawing ink without text and specks (page px)
 
 
 def _odd(v: float) -> int:
@@ -1036,7 +1037,12 @@ def vectorise(
         dbg = {"ink": ink, "thick": thick > 0, "fill": fill, "body": body > 0, "skel": skel}
     notes.append(f"noise σ {sigma:.3f}, stroke {stroke:.1f} px, {len(paths)} stroke paths")
     return RasterVectors(
-        {"paths": out_paths, "truncated": False, "frame": "page_px"}, stroke, notes, dbg, body > 0
+        {"paths": out_paths, "truncated": False, "frame": "page_px"},
+        stroke,
+        notes,
+        dbg,
+        body > 0,
+        ink.astype(bool),
     )
 
 

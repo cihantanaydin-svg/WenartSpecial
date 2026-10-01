@@ -53,15 +53,29 @@ def centerline_coords(wall: Wall, arc_segments: int = 48) -> list[tuple[float, f
     ]
 
 
-def wall_footprints(plan: PlanGraph) -> dict[str, Polygon]:
+type Footprint = Polygon | MultiPolygon
+
+
+def wall_footprints(plan: PlanGraph) -> dict[str, Footprint]:
     """Non-overlapping footprints whose union is the full wall network.
 
     Each centerline is buffered by half its thickness with square caps, which fills L-corners.
-    Overlaps go to the earlier wall, so every point of the union belongs to exactly one wall.
+    Junction areas go to the wall that comes first by priority (exterior, then thicker, then
+    longer), so main walls run through and the walls meeting them stop at their face. A wall
+    crossed by another (an X junction, or a stem that comes first) is owned in several parts.
     """
-    owned: dict[str, Polygon] = {}
+    owned: dict[str, Footprint] = {}
     taken: BaseGeometry = Polygon()
-    for wall in plan.walls:
+    order = sorted(
+        enumerate(plan.walls),
+        key=lambda iw: (
+            iw[1].kind != "exterior",
+            -iw[1].thickness_m.value,
+            -iw[1].centerline.length(),
+            iw[0],
+        ),
+    )
+    for _, wall in order:
         t = wall.thickness_m.value
         if t <= 0:
             raise ArchRenderError(
@@ -72,9 +86,8 @@ def wall_footprints(plan: PlanGraph) -> dict[str, Polygon]:
         buf = LineString(centerline_coords(wall)).buffer(
             t / 2.0, cap_style="square", join_style="mitre", mitre_limit=4.0
         )
-        piece = buf.difference(taken) if not taken.is_empty else buf
-        piece = _largest_polygon(piece)
-        if piece is None or piece.area < 1e-6:
+        piece = _polygons(buf.difference(taken) if not taken.is_empty else buf)
+        if piece is None:
             raise ArchRenderError(
                 ErrorCode.PLAN_INVALID,
                 f"Wall {wall.id} is completely covered by other walls (duplicate wall?).",
@@ -83,40 +96,36 @@ def wall_footprints(plan: PlanGraph) -> dict[str, Polygon]:
             )
         owned[wall.id] = piece
         taken = unary_union([taken, buf])
-    return owned
+    return {w.id: owned[w.id] for w in plan.walls}
 
 
-def _largest_polygon(geom: BaseGeometry) -> Polygon | None:
-    if isinstance(geom, Polygon):
-        return geom if not geom.is_empty else None
-    if isinstance(geom, MultiPolygon):
-        polys = [g for g in geom.geoms if g.area > 1e-6]
-        if not polys:
-            return None
-        if len(polys) > 1:
-            # A wall piece split in two means a sliver: keep the main body, the sliver is owned
-            # by the union through the neighbouring wall. Guard against real splits.
-            polys.sort(key=lambda p: p.area, reverse=True)
-            if polys[1].area > 0.01 * polys[0].area:
-                raise ArchRenderError(
-                    ErrorCode.PLAN_INVALID,
-                    "A wall footprint is split by another wall (crossing walls without a junction).",
-                    "Split crossing walls at their intersection at Gate A.",
-                )
-        return polys[0]
-    return None
+def _polygons(geom: BaseGeometry, min_area: float = 1e-6) -> Footprint | None:
+    """The polygonal parts of ``geom`` (slivers below 1 mm² dropped), or None."""
+    parts = [
+        g
+        for g in (geom.geoms if hasattr(geom, "geoms") else [geom])
+        if isinstance(g, Polygon) and g.area >= min_area
+    ]
+    if not parts:
+        return None
+    single: Polygon = parts[0]
+    return single if len(parts) == 1 else MultiPolygon(parts)
 
 
-def polygon_to_cross_section(poly: Polygon) -> CrossSection:
-    """manifold3d wants counter-clockwise outer rings and clockwise holes (shapely ``orient``)."""
-    poly = orient(poly, sign=1.0)
-    rings = [list(poly.exterior.coords)[:-1]] + [list(r.coords)[:-1] for r in poly.interiors]
+def polygon_to_cross_section(poly: Footprint) -> CrossSection:
+    """manifold3d wants counter-clockwise outer rings and clockwise holes (shapely ``orient``);
+    disjoint parts are separate contours of one cross-section."""
+    rings: list[list[tuple[float, float]]] = []
+    for part in poly.geoms if isinstance(poly, MultiPolygon) else [poly]:
+        o = orient(part, sign=1.0)
+        rings.append(list(o.exterior.coords)[:-1])
+        rings += [list(r.coords)[:-1] for r in o.interiors]
     return CrossSection(
         [[(float(x), float(y)) for x, y in ring] for ring in rings], FillRule.EvenOdd
     )
 
 
-def extrude(poly: Polygon, z0: float, z1: float) -> Manifold:
+def extrude(poly: Footprint, z0: float, z1: float) -> Manifold:
     if z1 <= z0:
         raise ArchRenderError(
             ErrorCode.SCENE_INVALID, "Extrusion height must be positive.", "Check heights."

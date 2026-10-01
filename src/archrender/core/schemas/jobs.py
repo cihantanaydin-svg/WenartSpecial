@@ -30,6 +30,7 @@ class JobStatus(StrEnum):
 class JobKind(StrEnum):
     INTAKE = "intake"
     UNDERSTAND = "understand"
+    PLAN = "plan"
     RUN = "run"
     BUNDLE = "bundle"
 

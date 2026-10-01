@@ -32,7 +32,33 @@ def validate_plan(plan: PlanGraph) -> list[ValidationIssue]:
     issues += _walls(plan)
     issues += _openings(plan)
     issues += _reachability(plan)
+    issues += _conflicts(plan)
     return issues
+
+
+def _conflicts(plan: PlanGraph) -> list[ValidationIssue]:
+    """Unresolved conflicts between sources (a scale disagreement, a schedule width) wait for a
+    decision at Gate A."""
+    out = []
+    for c in plan.conflicts:
+        if c.resolution is not None:
+            continue
+        scale = c.key.startswith("scale/")
+        cands = ", ".join(
+            f"{x.get('method', '?')} {x.get('m_per_unit', x.get('value', ''))}"
+            for x in c.candidates
+        )
+        out.append(
+            ValidationIssue(
+                code="PLAN_SCALE_CONFLICT" if scale else "PLAN_CONFLICT",
+                severity=c.severity,
+                message=f"{c.key}: sources disagree ({cands}); proposed candidate {c.proposed}.",
+                fix_hint="Choose the right value at Gate A"
+                + (" (or calibrate the scale with a known length)." if scale else "."),
+                element_ids=[],
+            )
+        )
+    return out
 
 
 def blocking(issues: list[ValidationIssue]) -> list[ValidationIssue]:

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+from functools import cache
+
+import numpy as np
 
 from archrender.ingest.uploads import complete_upload, create_upload, put_chunk
 from archrender.pipeline.services import Services
@@ -13,6 +16,17 @@ MINIMAL_DXF = (
     b"0\nLINE\n8\nDUVAR\n10\n0.0\n20\n0.0\n11\n5.0\n21\n0.0\n"
     b"0\nENDSEC\n0\nEOF\n"
 )
+
+
+@cache
+def plan_dxf(seed: int = 3) -> bytes:
+    """A synthetic floor plan (walls, doors, windows, room names, dimensions) as a cm DXF, the
+    smallest realistic input S1 labels ``floor_plan`` and S2 extracts a valid plan from."""
+    from archrender.synth.dxf import plan_dxf as write_dxf
+    from archrender.synth.plan import random_spec
+
+    data, _ = write_dxf(random_spec(np.random.default_rng(seed), variant="manhattan"))
+    return data
 
 
 def upload_bytes(

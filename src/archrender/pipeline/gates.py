@@ -34,6 +34,40 @@ class Gates:
         )
         return GateStatus(row["status"]) if row else None
 
+    def _refuse_if_rejected(self, gate: GateName, current: GateStatus | None) -> None:
+        if current == GateStatus.REJECTED:
+            raise ArchRenderError(
+                ErrorCode.GATE_REJECTED,
+                f"Gate {gate.value} was rejected by a reviewer.",
+                "Address the reviewer's notes (edit plan/brief/cameras) and start a new run.",
+            )
+
+    def record_approval(
+        self, gate: GateName, decided_by: str | None, evidence: dict[str, Any]
+    ) -> GateStatus:
+        """The gate's subject was already approved by a person outside this run (e.g. a plan
+        version approved at Gate A of an earlier run): record that decision for this run."""
+        current = self.status(gate)
+        if current in (GateStatus.APPROVED, GateStatus.AUTO_PASSED):
+            return current
+        self._refuse_if_rejected(gate, current)
+        with self.db.tx(immediate=True) as c:
+            c.execute(
+                "INSERT OR REPLACE INTO gates(run_id, gate, status, policy, evidence_json,"
+                " decided_by, decided_at, notes) VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    self.run_id,
+                    gate.value,
+                    GateStatus.APPROVED.value,
+                    self.policy,
+                    json.dumps(evidence, default=str),
+                    decided_by,
+                    now_iso(),
+                    "approved before this run",
+                ),
+            )
+        return GateStatus.APPROVED
+
     def check(
         self, gate: GateName, *, auto_ok: bool, evidence: dict[str, Any], mandatory: bool = False
     ) -> GateStatus:
@@ -41,12 +75,7 @@ class Gates:
         current = self.status(gate)
         if current in (GateStatus.APPROVED, GateStatus.AUTO_PASSED):
             return current
-        if current == GateStatus.REJECTED:
-            raise ArchRenderError(
-                ErrorCode.GATE_REJECTED,
-                f"Gate {gate.value} was rejected by a reviewer.",
-                "Address the reviewer's notes (edit plan/brief/cameras) and start a new run.",
-            )
+        self._refuse_if_rejected(gate, current)
         policy = "always" if mandatory else self.policy
         auto = policy == "never" or (policy == "on_low_confidence" and auto_ok)
         status = GateStatus.AUTO_PASSED if auto else GateStatus.PENDING

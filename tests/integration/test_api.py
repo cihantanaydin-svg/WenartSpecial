@@ -13,7 +13,7 @@ from archrender.api.app import create_app
 from archrender.core.config import Settings
 from archrender.pipeline.services import Services
 from archrender.pipeline.worker import Worker
-from tests.helpers import MINIMAL_DXF
+from tests.helpers import plan_dxf
 
 PUBLIC = {
     ("GET", "/healthz"),
@@ -183,7 +183,7 @@ def test_full_run_through_api_with_sse_and_bundle(app_env: tuple[TestClient, Ser
         headers=h,
     ).json()["id"]
     worker = Worker(svc, ["cpu", "gpu"], name="w")
-    intake = _upload(client, h, pid, "Kat Planı.dxf", MINIMAL_DXF * 1, resume=True)
+    intake = _upload(client, h, pid, "Kat Planı.dxf", plan_dxf(), resume=True)
     worker.run_until_idle()
     assert client.get(f"/api/v1/jobs/{intake}", headers=h).json()["status"] == "succeeded"
     docs = client.get(f"/api/v1/projects/{pid}/documents", headers=h).json()
@@ -235,6 +235,67 @@ def test_full_run_through_api_with_sse_and_bundle(app_env: tuple[TestClient, Ser
         assert "renders/view_1.png" in zf.namelist()
     audit = client.get("/api/v1/audit", headers=h).json()
     assert {"run.start", "gate.approve", "bundle.download"} <= {a["action"] for a in audit}
+
+
+def test_gate_a_plan_versions_through_the_api(app_env: tuple[TestClient, Services]) -> None:
+    client, svc = app_env
+    h = _admin(client)
+    users = {
+        role: client.post("/api/v1/users", json={"name": role[:2], "role": role}, headers=h).json()
+        for role in ("viewer", "reviewer", "editor")
+    }
+    hdr = {k: {"Authorization": f"Bearer {u['api_key']}"} for k, u in users.items()}
+    pid = client.post("/api/v1/projects", json={"name": "p"}, headers=h).json()["id"]
+    for role, u in users.items():
+        client.post(
+            f"/api/v1/projects/{pid}/members",
+            json={"user_id": u["user"]["id"], "role": role},
+            headers=h,
+        )
+    _upload(client, h, pid, "Kat Planı.dxf", plan_dxf())
+    Worker(svc, ["cpu", "gpu"], name="w").run_until_idle()
+
+    listing = client.get(f"/api/v1/projects/{pid}/plans", headers=hdr["viewer"]).json()
+    assert listing["job"]["status"] == "succeeded" and len(listing["versions"]) == 1
+    v1 = listing["versions"][0]
+    assert v1["status"] == "draft" and v1["origin"] == "extraction" and v1["blocking"] == 0
+    got = client.get(f"/api/v1/projects/{pid}/plans/{v1['id']}", headers=hdr["viewer"]).json()
+    assert got["plan"]["version"] == v1["id"] and got["plan"]["source"] == "dxf"
+
+    ops = [{"op": "replace", "path": "/rooms/0/name/value", "value": "Kiler"}]
+    url = f"/api/v1/projects/{pid}/plans/{v1['id']}"
+    assert client.post(f"{url}/edits", json={"ops": ops}, headers=hdr["viewer"]).status_code == 403
+    assert (
+        client.post(f"{url}/edits", json={"ops": ops}, headers=hdr["reviewer"]).status_code == 403
+    )
+    r = client.post(f"{url}/edits", json={"ops": ops, "note": "kiler"}, headers=hdr["editor"])
+    assert r.status_code == 201, r.text
+    v2 = r.json()
+    assert v2["parent_id"] == v1["id"] and v2["plan"]["rooms"][0]["name"]["value"] == "Kiler"
+    assert v2["plan"]["rooms"][0]["name"]["provenance"][0]["method"] == "user"
+    bad = client.post(
+        f"{url}/edits", json={"ops": [{"op": "remove", "path": "/nope"}]}, headers=hdr["editor"]
+    )
+    assert bad.status_code == 422 and bad.json()["error"]["code"] == "VALIDATION"
+    assert client.post(f"{url}/edits", json={"ops": []}, headers=hdr["editor"]).status_code == 422
+    r = client.post(f"{url}/resolve", json={"key": "scale/x", "choice": 0}, headers=hdr["editor"])
+    assert r.status_code == 404
+    assert client.get(f"/api/v1/projects/{pid}/plans/bad.id", headers=h).status_code == 422
+
+    v2url = f"/api/v1/projects/{pid}/plans/{v2['id']}"
+    assert client.post(f"{v2url}/approve", headers=hdr["viewer"]).status_code == 403
+    r = client.post(f"{v2url}/approve", headers=hdr["reviewer"])
+    assert r.status_code == 200 and r.json()["status"] == "approved"
+    examples = client.get(f"/api/v1/projects/{pid}/training-examples", headers=h).json()
+    assert len(examples) == 1 and examples[0]["training_use_allowed"] is False
+    assert examples[0]["payload"]["edits"][0]["patch"] == ops
+    r = client.post(f"/api/v1/projects/{pid}/plans/extract", headers=hdr["editor"])
+    assert r.status_code == 202
+    Worker(svc, ["cpu", "gpu"], name="w").run_until_idle()
+    listing = client.get(f"/api/v1/projects/{pid}/plans", headers=h).json()
+    assert len(listing["versions"]) == 2  # unchanged pages: the extraction is reused
+    audit = {a["action"] for a in client.get("/api/v1/audit", headers=h).json()}
+    assert {"plan.edit", "plan.approve", "plan.extract"} <= audit
 
 
 def test_healthz_and_readyz(app_env: tuple[TestClient, Services]) -> None:

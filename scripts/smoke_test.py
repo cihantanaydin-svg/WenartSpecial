@@ -4,10 +4,10 @@
     python scripts/smoke_test.py --url https://<POD>-8000.proxy.runpod.net --api-key ark_…
     python scripts/smoke_test.py --url http://127.0.0.1:8000 --bootstrap-token <admin token>
 
-Creates a project, uploads the golden input plus a small raster sheet, waits for page analysis
-(S1: OCR + classifier), runs a section with gate policy 'never', waits, downloads the bundle, and
-prints the pages, stage timings, render device, VRAM peaks (when recorded) and QA metrics. Exits
-non-zero on any failure.
+Creates a project, uploads a synthetic floor plan (DXF, fixed seed) plus a small raster sheet,
+waits for page analysis (S1: OCR + classifier), runs a section with gate policy 'never' (S2 extracts
+the plan), waits, downloads the bundle, and prints the pages, the plan version, stage timings,
+render device, VRAM peaks (when recorded) and QA metrics. Exits non-zero on any failure.
 """
 
 from __future__ import annotations
@@ -26,10 +26,16 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from archrender.client.client import ArchRenderClient, ArchRenderClientError  # noqa: E402
 
-GOLDEN_DXF = (
-    b"0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n6\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n"
-    b"0\nLINE\n8\nDUVAR\n10\n0.0\n20\n0.0\n11\n5.0\n21\n0.0\n0\nENDSEC\n0\nEOF\n"
-)
+
+def _plan_dxf() -> bytes:
+    """A synthetic apartment floor plan (walls, doors, windows, room names, dimensions; cm)."""
+    import numpy as np
+
+    from archrender.synth.dxf import plan_dxf
+    from archrender.synth.plan import random_spec
+
+    data, _ = plan_dxf(random_spec(np.random.default_rng(3), variant="manhattan"))
+    return data
 
 
 def _sheet_png() -> bytes:
@@ -84,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
         project = c.create_project(f"smoke {time.strftime('%Y-%m-%d %H:%M')}", 41.0082, 28.9784)
         with tempfile.TemporaryDirectory() as tmp:
             f = Path(tmp) / "Kat Planı.dxf"
-            f.write_bytes(GOLDEN_DXF)
+            f.write_bytes(_plan_dxf())
             sheet = Path(tmp) / "Tarama.png"
             sheet.write_bytes(_sheet_png())
             for path in (f, sheet):
@@ -125,6 +131,16 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         r = c.get_run(run["run_id"])
         result = r["result"]
+        plan = c.plan_version(project["id"], result["plan_version"])
+        print("\n== plan (S2)")
+        print(
+            f"  {plan['id']} v{plan['number']} {plan['status']}: {len(plan['plan']['walls'])} walls,"
+            f" {len(plan['plan']['openings'])} openings, {len(plan['plan']['rooms'])} rooms"
+            f" from {plan['plan']['source']}; {plan['blocking']} blocking issues"
+        )
+        if plan["plan"]["source"] != "dxf" or len(plan["plan"]["rooms"]) < 2:
+            print("FAIL: the plan was not extracted from the uploaded DXF", file=sys.stderr)
+            return 1
         dest = Path(tempfile.gettempdir()) / f"smoke_{run['run_id']}.zip"
         c.download_bundle(r["bundle"]["id"], dest)
         with zipfile.ZipFile(dest) as zf:

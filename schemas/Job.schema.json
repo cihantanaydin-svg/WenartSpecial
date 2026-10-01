@@ -97,6 +97,7 @@
       "enum": [
         "intake",
         "understand",
+        "plan",
         "run",
         "bundle"
       ],

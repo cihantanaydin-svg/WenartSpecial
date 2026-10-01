@@ -10,7 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from archrender.api.routes import auth, projects, runs, system, understand
+from archrender.api.routes import auth, plans, projects, runs, system, understand
 from archrender.api.security import FailureLimiter
 from archrender.core.config import Settings, get_settings
 from archrender.core.errors import ArchRenderError, ErrorCode
@@ -142,7 +142,14 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         ).to_info()
         return JSONResponse({"error": info.model_dump(mode="json")}, status_code=500)
 
-    for r in (auth.router, projects.router, runs.router, understand.router, system.router):
+    for r in (
+        auth.router,
+        projects.router,
+        runs.router,
+        understand.router,
+        plans.router,
+        system.router,
+    ):
         app.include_router(r, prefix="/api/v1")
 
     @app.get("/healthz", tags=["system"])

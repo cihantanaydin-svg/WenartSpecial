@@ -12,7 +12,7 @@ from archrender.core.config import REPO_ROOT
 from archrender.synth.sheets import floor_plan_page
 from tests.conftest import STRICT
 from tests.e2e.conftest import Live
-from tests.helpers import MINIMAL_DXF
+from tests.helpers import plan_dxf
 
 pytestmark = [pytest.mark.e2e, pytest.mark.blender]
 
@@ -47,7 +47,7 @@ def test_ui_full_flow(live: Live, page, tmp_path: Path) -> None:  # type: ignore
     expect(page.locator("h1", has_text="Daire 3+1 Kadıköy")).to_be_visible()
 
     plan = tmp_path / "Kat Planı.dxf"
-    plan.write_bytes(MINIMAL_DXF)
+    plan.write_bytes(plan_dxf())
     page.set_input_files("[data-testid=file-input]", str(plan))
     expect(page.locator(".progress-row", has_text="done")).to_be_visible(timeout=30_000)
     expect(page.locator("li", has_text="Kat Planı.dxf")).to_be_visible(timeout=10_000)

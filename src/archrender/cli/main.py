@@ -161,8 +161,77 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_gate(args: argparse.Namespace) -> int:
-    run = _client(args).decide_gate(args.run, args.gate, args.action == "approve", args.notes)
+    run = _client(args).decide_gate(
+        args.run, args.gate, args.action == "approve", args.notes, args.plan_version
+    )
     print(f"gate {args.gate}: {args.action}d; run status {run['status']}")
+    return 0
+
+
+def _plan_line(v: dict[str, Any]) -> str:
+    ex = v["extraction"]
+    srcs = ", ".join(f"{s['source']}:{s['page']}" for s in ex.get("sources", []))
+    return (
+        f"{v['id']}  v{v['number']:<3} {v['status']:<10} {v['origin']:<10} "
+        f"{len(v['issues'])} issues ({v['blocking']} blocking)  {srcs}"
+    )
+
+
+def cmd_plan(args: argparse.Namespace) -> int:
+    c = _client(args)
+    if args.action == "list":
+        out = c.plan_versions(args.project)
+        if args.json:
+            _print(out, True)
+            return 0
+        job = out["job"]
+        if job is not None and job["status"] != "succeeded":
+            print(f"plan job {job['id']}: {job['status']}")
+        for v in out["versions"]:
+            print(_plan_line(v))
+        return 0
+    if args.action == "extract":
+        _print(c.extract_plan(args.project), args.json)
+        return 0
+    if not args.version:
+        print(f"error: plan {args.action} needs a VERSION id", file=sys.stderr)
+        return 2
+    if args.action == "show":
+        v = c.plan_version(args.project, args.version)
+        if args.json:
+            _print(v, True)
+            return 0
+        plan = v["plan"]
+        print(_plan_line(v))
+        print(
+            f"  {len(plan['walls'])} walls, {len(plan['openings'])} openings, "
+            f"{len(plan['rooms'])} rooms, source {plan['source']}"
+        )
+        for i in v["issues"]:
+            print(f"  [{i['severity']}] {i['code']}: {i['message']}")
+        for k in plan["conflicts"]:
+            state = "open" if k["resolution"] is None else f"resolved → {k['resolution']}"
+            print(f"  conflict {k['key']} ({state}); proposed {k['proposed']}:")
+            for n, cand in enumerate(k["candidates"]):
+                print(f"    {n}: {json.dumps(cand, ensure_ascii=False)}")
+        return 0
+    if args.action == "edit":
+        if not args.patch:
+            print("error: plan edit needs --patch FILE (RFC 6902 JSON Patch)", file=sys.stderr)
+            return 2
+        ops = json.loads(Path(args.patch).read_text(encoding="utf-8"))
+        v = c.edit_plan(args.project, args.version, ops, args.note or "")
+    elif args.action == "resolve":
+        if args.key is None or args.choice is None:
+            print("error: plan resolve needs --key and --choice", file=sys.stderr)
+            return 2
+        v = c.resolve_plan_conflict(args.project, args.version, args.key, args.choice)
+    else:
+        v = c.approve_plan(args.project, args.version)
+    if args.json:
+        _print(v, True)
+    else:
+        print(_plan_line(v))
     return 0
 
 
@@ -305,7 +374,23 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("run")
     g.add_argument("gate", choices=["A_plan", "B_brief", "C_cameras", "D_final"])
     g.add_argument("--notes")
+    g.add_argument(
+        "--plan-version",
+        help="Gate A: the plan version to approve (default: the latest edit of the run's plan)",
+    )
     g.set_defaults(fn=cmd_gate)
+
+    pl = sub.add_parser(
+        "plan", parents=[common], help="plan versions: list, show, edit, resolve, approve (Gate A)"
+    )
+    pl.add_argument("action", choices=["list", "show", "extract", "edit", "resolve", "approve"])
+    pl.add_argument("project")
+    pl.add_argument("version", nargs="?")
+    pl.add_argument("--patch", help="edit: a JSON file with RFC 6902 operations")
+    pl.add_argument("--note")
+    pl.add_argument("--key", help="resolve: the conflict key, e.g. scale/pg_…")
+    pl.add_argument("--choice", type=int, help="resolve: the candidate index")
+    pl.set_defaults(fn=cmd_plan)
 
     pg = sub.add_parser(
         "pages", parents=[common], help="list a project's pages with their class (S1)"

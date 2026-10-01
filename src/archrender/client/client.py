@@ -205,13 +205,56 @@ class ArchRenderClient:
         return dict(self._get(f"/api/v1/jobs/{job_id}"))
 
     def decide_gate(
-        self, run_id: str, gate: str, approve: bool, notes: str | None = None
+        self,
+        run_id: str,
+        gate: str,
+        approve: bool,
+        notes: str | None = None,
+        plan_version: str | None = None,
+    ) -> dict[str, Any]:
+        """``plan_version`` (Gate A only): the plan version to approve; default the latest edit."""
+        body: dict[str, Any] = {"approve": approve, "notes": notes}
+        if plan_version is not None:
+            body["plan_version"] = plan_version
+        return dict(self._post(f"/api/v1/runs/{run_id}/gates/{gate}", json=body))
+
+    # ---- plans (S2 / Gate A) ------------------------------------------------------------------
+    def plan_versions(self, project_id: str) -> dict[str, Any]:
+        """``{"versions": [...newest first], "job": latest PLAN job or None}``."""
+        return dict(self._get(f"/api/v1/projects/{project_id}/plans"))
+
+    def plan_version(self, project_id: str, version_id: str) -> dict[str, Any]:
+        return dict(self._get(f"/api/v1/projects/{project_id}/plans/{version_id}"))
+
+    def extract_plan(self, project_id: str) -> dict[str, Any]:
+        return dict(self._post(f"/api/v1/projects/{project_id}/plans/extract"))
+
+    def edit_plan(
+        self, project_id: str, version_id: str, ops: list[dict[str, Any]], note: str = ""
+    ) -> dict[str, Any]:
+        """Apply an RFC 6902 JSON Patch; returns the new draft version (with its plan)."""
+        return dict(
+            self._post(
+                f"/api/v1/projects/{project_id}/plans/{version_id}/edits",
+                json={"ops": ops, "note": note},
+            )
+        )
+
+    def resolve_plan_conflict(
+        self, project_id: str, version_id: str, key: str, choice: int
     ) -> dict[str, Any]:
         return dict(
             self._post(
-                f"/api/v1/runs/{run_id}/gates/{gate}", json={"approve": approve, "notes": notes}
+                f"/api/v1/projects/{project_id}/plans/{version_id}/resolve",
+                json={"key": key, "choice": choice},
             )
         )
+
+    def approve_plan(self, project_id: str, version_id: str) -> dict[str, Any]:
+        return dict(self._post(f"/api/v1/projects/{project_id}/plans/{version_id}/approve"))
+
+    def training_examples(self, project_id: str) -> list[dict[str, Any]]:
+        return list(self._get(f"/api/v1/projects/{project_id}/training-examples"))
 
     def events(self, job_id: str, last_event_id: int = 0) -> Iterator[dict[str, Any]]:
         """Follow SSE events; reconnects with Last-Event-ID until the server sends 'end'."""

@@ -29,19 +29,19 @@ from archrender.core.schemas.manifest import RunManifest
 from archrender.core.schemas.provenance import Assumption
 from archrender.core.schemas.scene import RenderSettings
 from archrender.pipeline.engine import StageContext, StageEngine
-from archrender.pipeline.gates import GatePolicy, Gates
+from archrender.pipeline.gates import GatePolicy, Gates, decide
 from archrender.pipeline.services import Services
 from archrender.pipeline.stages import (
     BriefIn,
     CamerasIn,
-    PlanIn,
     RefineQAIn,
     RenderIn,
     SceneIn,
     build_stages,
     resolve_section,
 )
-from archrender.plan.validate import blocking
+from archrender.plan import versions
+from archrender.plan.stage import current_plan, version_plan
 from archrender.qa.policy import delivered_checks
 from archrender.qa.runner import families_covered
 from archrender.refine.prompt import compile_prompt
@@ -92,6 +92,51 @@ def create_run(svc: Services, project_id: str, config: RunConfig, user_id: str) 
     return run_id, job_id
 
 
+def decide_gate(
+    svc: Services,
+    run_id: str,
+    gate: str,
+    *,
+    approve: bool,
+    user_id: str,
+    notes: str | None,
+    plan_version: str | None = None,
+) -> None:
+    """A reviewer's gate decision. Approving Gate A approves a plan version: the one named, or
+    the latest edit of the version the run was parked with; the run then renders that version.
+    The plan is approved first, so a plan with blocking issues leaves the gate pending."""
+    run = svc.db.one("SELECT project_id, plan_version FROM runs WHERE id = ?", (run_id,))
+    if run is None:
+        raise not_found("Run", run_id)
+    if plan_version is not None and gate != GateName.A.value:
+        raise ArchRenderError(
+            ErrorCode.VALIDATION,
+            f"A plan version can only be chosen at Gate {GateName.A.value}.",
+            "Drop plan_version from the decision.",
+        )
+    if gate == GateName.A.value and approve:
+        g = svc.db.one("SELECT status FROM gates WHERE run_id = ? AND gate = ?", (run_id, gate))
+        if g is not None and g["status"] == "pending":
+            pid = run["project_id"]
+            if plan_version is None:
+                if not run["plan_version"]:
+                    raise ArchRenderError(
+                        ErrorCode.CONFLICT,
+                        "The run has no plan version yet.",
+                        "Wait until the run reaches Gate A.",
+                    )
+                parked = versions.get_row(svc, pid, run["plan_version"])
+                plan_version = str(versions.head(svc, pid, parked["root_id"])["id"])
+            versions.approve(svc, pid, plan_version, user_id=user_id)
+            svc.db.execute("UPDATE runs SET plan_version = ? WHERE id = ?", (plan_version, run_id))
+            notes = (
+                f"{notes} (plan version {plan_version})"
+                if notes
+                else f"plan version {plan_version}"
+            )
+    decide(svc.db, run_id, gate, approve=approve, user_id=user_id, notes=notes)
+
+
 def _git_commit() -> str | None:
     env = os.environ.get("ARCHRENDER_GIT_COMMIT")
     if env:
@@ -133,14 +178,7 @@ class RunOrchestrator:
         cfg = RunConfig.model_validate_json(row["config_json"])
         svc.db.execute("UPDATE runs SET status = 'running' WHERE id = ?", (self.run_id,))
         gates = Gates(svc.db, self.run_id, cfg.gate_policy)
-        docs = [
-            r["sha256"]
-            for r in svc.db.query(
-                "SELECT sha256 FROM documents WHERE project_id = ? ORDER BY sha256",
-                (ctx.project_id,),
-            )
-        ]
-        if not docs:
+        if not svc.db.one("SELECT 1 FROM documents WHERE project_id = ?", (ctx.project_id,)):
             raise ArchRenderError(
                 ErrorCode.PLAN_NO_PLAN_FOUND,
                 "The project has no ingested documents.",
@@ -148,18 +186,37 @@ class RunOrchestrator:
             )
 
         ctx.progress(0.02, "S2 plan")
-        plan_out = eng.run(st["plan"], PlanIn(doc_shas=docs), ctx)
-        plan = plan_out.plan
-        blockers = blocking(plan_out.issues)
-        gates.check(
-            GateName.A,
-            auto_ok=not blockers,
-            mandatory=plan.source == "raster",
-            evidence={
-                "issues": [i.model_dump(mode="json") for i in plan_out.issues],
-                "plan_source": plan.source,
-            },
-        )
+        # a run keeps the plan version it started with (a resumed run must not pick up a plan
+        # approved in the meantime); a Gate A approval of an edited version re-pins it
+        pinned = svc.db.one("SELECT plan_version FROM runs WHERE id = ?", (self.run_id,))
+        if pinned is not None and pinned["plan_version"]:
+            cur = version_plan(svc, ctx.project_id, pinned["plan_version"])
+        else:
+            cur = current_plan(svc, ctx, eng)
+            svc.db.execute(
+                "UPDATE runs SET plan_version = ? WHERE id = ?", (cur.version_id, self.run_id)
+            )
+        plan = cur.plan
+        plan_evidence = {
+            "plan_version": cur.version_id,
+            "plan_number": cur.number,
+            "plan_status": cur.status,
+            "extraction_version": cur.extraction_version,
+            "plan_source": plan.source,
+            "issues": [i.model_dump(mode="json") for i in cur.issues],
+            "open_conflicts": [c.key for c in plan.conflicts if c.resolution is None],
+            "sources": cur.extraction["sources"],
+        }
+        if cur.status == "approved":
+            # the reviewer approved this plan version at Gate A (possibly for an earlier run)
+            gates.record_approval(GateName.A, cur.approved_by, plan_evidence)
+        else:
+            gates.check(
+                GateName.A,
+                auto_ok=not cur.blocking,
+                mandatory=plan.source == "raster",
+                evidence=plan_evidence,
+            )
 
         section = resolve_section(plan, cfg.room_ids)
         check_elements_exist(cfg.materials, plan)
@@ -188,7 +245,7 @@ class RunOrchestrator:
         scene_out = eng.run(
             st["scene"],
             SceneIn(
-                plan_json=plan_out.plan_json,
+                plan_json=cur.plan_json,
                 section=section,
                 brief=brief,
                 render=render,
@@ -200,7 +257,7 @@ class RunOrchestrator:
         cams_out = eng.run(
             st["cameras"],
             CamerasIn(
-                plan_json=plan_out.plan_json,
+                plan_json=cur.plan_json,
                 room_ids=section.room_ids,
                 views=cfg.views,
                 width=cfg.width,
@@ -325,7 +382,7 @@ class RunOrchestrator:
             run_id=self.run_id,
             project_name=self._project_name(),
             mode=cfg.mode,
-            plan_json=plan_out.plan_json,
+            plan_json=cur.plan_json,
             scene_json=scene_out.scene_json,
             glb=scene_out.glb,
             blend_file=scene_out.blend_file,
@@ -374,7 +431,8 @@ class RunOrchestrator:
                 for v in views
             ],
             "assumptions": [a.model_dump(mode="json") for a in assumptions],
-            "plan_issues": [i.model_dump(mode="json") for i in plan_out.issues],
+            "plan_version": cur.version_id,
+            "plan_issues": [i.model_dump(mode="json") for i in cur.issues],
             "timings": [t.model_dump() for t in eng.timings],
         }
         svc.db.execute(

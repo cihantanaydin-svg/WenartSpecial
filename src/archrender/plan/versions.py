@@ -1,0 +1,567 @@
+"""Plan versions and Gate A (ARCHITECTURE §S3).
+
+S2 stores each new extraction as a draft version. Gate A edits are RFC 6902 JSON Patches on the
+PlanGraph; every edit makes a new draft (the edited facts carry ``user`` provenance), and an
+approved version never changes again (a later edit starts a new draft from it). Resolving a
+scale conflict rescales the plan to the chosen estimate. Approval is refused while blocking
+issues remain. On approval, the corrections from the extraction to the approved plan are kept as
+a training example; whether they may ever be used for training is the owner's decision, so they
+are stored with ``training_use_allowed = false`` (owner decision, Phase 0).
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+from typing import Any
+
+from pydantic import ValidationError
+
+from archrender.core.cas import CasRef
+from archrender.core.errors import ArchRenderError, ErrorCode, not_found
+from archrender.core.hashing import sha256_json
+from archrender.core.ids import new_id, now_iso
+from archrender.core.schemas.plan import PlanGraph
+from archrender.pipeline.services import Services
+from archrender.plan.validate import blocking, validate_plan
+
+# ---------------------------------------------------------------------------------------------
+# JSON Patch (RFC 6902)
+# ---------------------------------------------------------------------------------------------
+
+
+def _tokens(path: str) -> list[str]:
+    if path == "":
+        return []
+    if not path.startswith("/"):
+        raise ValueError(f"JSON pointer must start with '/': {path!r}")
+    return [t.replace("~1", "/").replace("~0", "~") for t in path[1:].split("/")]
+
+
+def _parent(doc: Any, path: str) -> tuple[Any, str]:
+    toks = _tokens(path)
+    if not toks:
+        raise ValueError("the operation needs a member path, not the whole document")
+    cur = doc
+    for t in toks[:-1]:
+        cur = cur[int(t)] if isinstance(cur, list) else cur[t]
+    return cur, toks[-1]
+
+
+def _get(doc: Any, path: str) -> Any:
+    cur = doc
+    for t in _tokens(path):
+        cur = cur[int(t)] if isinstance(cur, list) else cur[t]
+    return cur
+
+
+def apply_patch(doc: Any, ops: list[dict[str, Any]]) -> Any:
+    """Apply a JSON Patch to a copy of ``doc`` (all operations or none)."""
+    out = copy.deepcopy(doc)
+    for i, op in enumerate(ops):
+        kind = op.get("op")
+        try:
+            if kind == "test":
+                if _get(out, op["path"]) != op["value"]:
+                    raise ValueError("test failed")
+                continue
+            if kind in ("move", "copy"):
+                value = copy.deepcopy(_get(out, op["from"]))
+                if kind == "move":
+                    out = apply_patch(out, [{"op": "remove", "path": op["from"]}])
+                out = apply_patch(out, [{"op": "add", "path": op["path"], "value": value}])
+                continue
+            parent, key = _parent(out, op["path"])
+            if kind == "add":
+                if isinstance(parent, list):
+                    parent.insert(len(parent) if key == "-" else int(key), op["value"])
+                else:
+                    parent[key] = op["value"]
+            elif kind == "remove":
+                if isinstance(parent, list):
+                    parent.pop(int(key))
+                else:
+                    del parent[key]
+            elif kind == "replace":
+                if isinstance(parent, list):
+                    parent[int(key)] = op["value"]
+                else:
+                    if key not in parent:
+                        raise KeyError(key)
+                    parent[key] = op["value"]
+            else:
+                raise ValueError(f"unknown operation {kind!r}")
+        except (KeyError, IndexError, ValueError, TypeError) as e:
+            raise ArchRenderError(
+                ErrorCode.VALIDATION,
+                f"Edit operation {i} ({kind} {op.get('path')}) cannot be applied: {e}.",
+                "Reload the plan (it may have changed) and repeat the edit.",
+            ) from e
+    return out
+
+
+# ---------------------------------------------------------------------------------------------
+# provenance of edited values
+# ---------------------------------------------------------------------------------------------
+
+
+def _user_fact(value: Any, unit: Any, note: str) -> dict[str, Any]:
+    return {
+        "value": value,
+        "unit": unit,
+        "provenance": [
+            {"method": "user", "confidence": 1.0, "note": note, "created_at": now_iso()}
+        ],
+        "status": "user_confirmed",
+    }
+
+
+def _is_fact(x: Any) -> bool:
+    return isinstance(x, dict) and "value" in x and "provenance" in x
+
+
+def _mark_user(old: Any, new: Any, note: str) -> Any:
+    """Facts whose value changed (or that are new) become user facts; elements are matched by
+    id inside lists so reordering does not count as an edit."""
+    if _is_fact(new):
+        if not _is_fact(old) or old["value"] != new["value"]:
+            return _user_fact(new["value"], new.get("unit"), note)
+        return new
+    if isinstance(new, dict):
+        return {
+            k: _mark_user(old.get(k) if isinstance(old, dict) else None, v, note)
+            for k, v in new.items()
+        }
+    if isinstance(new, list):
+        by_id = (
+            {o.get("id"): o for o in old if isinstance(o, dict) and "id" in o}
+            if isinstance(old, list)
+            else {}
+        )
+        out = []
+        for i, v in enumerate(new):
+            if isinstance(v, dict) and "id" in v:
+                out.append(_mark_user(by_id.get(v["id"]), v, note))
+            else:
+                ov = old[i] if isinstance(old, list) and i < len(old) else None
+                out.append(_mark_user(ov, v, note))
+        return out
+    return new
+
+
+def content_sha(plan: PlanGraph) -> str:
+    """Hash of the plan's content (no version id, no provenance timestamps)."""
+
+    def strip(x: Any) -> Any:
+        if isinstance(x, dict):
+            return {k: strip(v) for k, v in x.items() if k not in ("created_at", "version")}
+        if isinstance(x, list):
+            return [strip(v) for v in x]
+        return x
+
+    return sha256_json(strip(plan.model_dump(mode="json")))
+
+
+# ---------------------------------------------------------------------------------------------
+# versions
+# ---------------------------------------------------------------------------------------------
+
+
+def get_row(svc: Services, project_id: str, version_id: str) -> dict[str, Any]:
+    row = svc.db.one(
+        "SELECT * FROM plan_versions WHERE id = ? AND project_id = ?", (version_id, project_id)
+    )
+    if row is None:
+        raise not_found("Plan version", version_id)
+    return dict(row)
+
+
+def load(svc: Services, project_id: str, version_id: str) -> PlanGraph:
+    row = get_row(svc, project_id, version_id)
+    ref = CasRef.model_validate_json(row["plan_ref_json"])
+    return PlanGraph.model_validate_json(svc.store(project_id).read_bytes(ref))
+
+
+def summary(row: dict[str, Any]) -> dict[str, Any]:
+    issues = json.loads(row["issues_json"])
+    return {
+        "id": row["id"],
+        "number": row["number"],
+        "parent_id": row["parent_id"],
+        "root_id": row["root_id"],
+        "status": row["status"],
+        "origin": row["origin"],
+        "plan_sha256": row["plan_sha256"],
+        "issues": issues,
+        "blocking": sum(1 for i in issues if i["severity"] in ("error", "blocker")),
+        "extraction": json.loads(row["extraction_json"]),
+        "created_by": row["created_by"],
+        "created_at": row["created_at"],
+        "approved_by": row["approved_by"],
+        "approved_at": row["approved_at"],
+    }
+
+
+def list_versions(svc: Services, project_id: str) -> list[dict[str, Any]]:
+    rows = svc.db.query(
+        "SELECT * FROM plan_versions WHERE project_id = ? ORDER BY number DESC", (project_id,)
+    )
+    return [summary(dict(r)) for r in rows]
+
+
+def latest(svc: Services, project_id: str, *, approved: bool = False) -> dict[str, Any] | None:
+    sql = "SELECT * FROM plan_versions WHERE project_id = ? AND status = 'approved'"
+    if not approved:
+        sql = "SELECT * FROM plan_versions WHERE project_id = ? AND status != 'superseded'"
+    row = svc.db.one(sql + " ORDER BY number DESC LIMIT 1", (project_id,))
+    return dict(row) if row else None
+
+
+def head(svc: Services, project_id: str, root_id: str) -> dict[str, Any]:
+    """The newest version descending from the extraction ``root_id`` (the latest edit)."""
+    row = svc.db.one(
+        "SELECT * FROM plan_versions WHERE project_id = ? AND root_id = ? ORDER BY number DESC"
+        " LIMIT 1",
+        (project_id, root_id),
+    )
+    if row is None:
+        raise not_found("Plan version", root_id)
+    return dict(row)
+
+
+def working(svc: Services, project_id: str, root_id: str) -> dict[str, Any]:
+    """The version a run uses for the extraction ``root_id``: the approved one when there is one
+    (later drafts take effect only once approved), otherwise the latest edit."""
+    row = svc.db.one(
+        "SELECT * FROM plan_versions WHERE project_id = ? AND root_id = ? AND status = 'approved'",
+        (project_id, root_id),
+    )
+    return dict(row) if row else head(svc, project_id, root_id)
+
+
+def _insert(
+    svc: Services,
+    project_id: str,
+    plan: PlanGraph,
+    *,
+    origin: str,
+    parent: str | None,
+    root: str | None,
+    extraction: dict[str, Any],
+    user_id: str | None,
+) -> tuple[str, PlanGraph]:
+    vid = new_id("plv")
+    plan = plan.model_copy(update={"version": vid, "issues": validate_plan(plan)})
+    plan = PlanGraph.model_validate(plan.model_dump())
+    store = svc.store(project_id)
+    ref = store.put_bytes(
+        plan.model_dump_json(indent=1).encode(), "application/json", f"plan_{vid}.json"
+    )
+    with svc.db.tx(immediate=True) as c:
+        row = c.execute(
+            "SELECT COALESCE(MAX(number), 0) AS n FROM plan_versions WHERE project_id = ?",
+            (project_id,),
+        ).fetchone()
+        c.execute(
+            "INSERT INTO plan_versions(id, project_id, number, parent_id, root_id, status, origin,"
+            " plan_sha256, plan_ref_json, issues_json, extraction_json, created_by, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                vid,
+                project_id,
+                int(row["n"]) + 1,
+                parent,
+                root or vid,
+                "draft",
+                origin,
+                content_sha(plan),
+                ref.model_dump_json(),
+                json.dumps([i.model_dump(mode="json") for i in plan.issues]),
+                json.dumps(extraction, default=str),
+                user_id,
+                now_iso(),
+            ),
+        )
+    return vid, plan
+
+
+def record_extraction(
+    svc: Services, project_id: str, plan: PlanGraph, extraction: dict[str, Any]
+) -> str:
+    """A draft version for a new extraction; an unchanged extraction reuses its version."""
+    sha = content_sha(plan.model_copy(update={"issues": validate_plan(plan)}))
+    row = svc.db.one(
+        "SELECT id FROM plan_versions WHERE project_id = ? AND origin = 'extraction' AND plan_sha256 = ?"
+        " ORDER BY number DESC LIMIT 1",
+        (project_id, sha),
+    )
+    if row is not None:
+        return str(row["id"])
+    vid, _ = _insert(
+        svc,
+        project_id,
+        plan,
+        origin="extraction",
+        parent=None,
+        root=None,
+        extraction=extraction,
+        user_id=None,
+    )
+    return vid
+
+
+def edit(
+    svc: Services,
+    project_id: str,
+    version_id: str,
+    ops: list[dict[str, Any]],
+    *,
+    user_id: str,
+    note: str = "",
+) -> str:
+    base_row = get_row(svc, project_id, version_id)
+    base = load(svc, project_id, version_id)
+    old = base.model_dump(mode="json")
+    new = apply_patch(old, ops)
+    new = _mark_user(old, new, note or "Gate A edit")
+    try:
+        plan = PlanGraph.model_validate(new)
+    except ValidationError as e:
+        err = e.errors()[0]
+        msg = str(err["msg"]).removeprefix("Value error, ")
+        where = "/".join(map(str, err["loc"]))
+        raise ArchRenderError(
+            ErrorCode.VALIDATION,
+            f"The edited plan is not valid: {msg}" + (f" (at /{where})." if where else "."),
+            "Undo the last change; every opening needs an existing host wall, every room ≥ 3 points.",
+        ) from e
+    plan.source = base.source if base.source != "mock" else "user"
+    vid, _ = _insert(
+        svc,
+        project_id,
+        plan,
+        origin="edit",
+        parent=version_id,
+        root=base_row["root_id"],
+        extraction=json.loads(base_row["extraction_json"]),
+        user_id=user_id,
+    )
+    svc.db.execute(
+        "INSERT INTO plan_edits(id, project_id, from_version, to_version, patch_json, summary, created_by,"
+        " created_at) VALUES (?,?,?,?,?,?,?,?)",
+        (new_id("ple"), project_id, version_id, vid, json.dumps(ops), note, user_id, now_iso()),
+    )
+    return vid
+
+
+def rescale(
+    plan: PlanGraph, k: float, *, level: str | None = None, page_id: str | None = None
+) -> PlanGraph:
+    """Lengths × k about the plan origin (a different scale for the same sheet): the elements of
+    ``level`` (all when None) and the document transform of ``page_id`` (all when None).
+    Heights and stated values (area labels) are not plan measurements and stay."""
+    d = plan.model_dump(mode="json")
+
+    def pt(p: dict[str, Any]) -> None:
+        p["x"], p["y"] = p["x"] * k, p["y"] * k
+
+    def on(el: dict[str, Any]) -> bool:
+        return level is None or el["level"] == level
+
+    walls = {w["id"] for w in d["walls"] if on(w)}
+    for w in d["walls"]:
+        if w["id"] not in walls:
+            continue
+        cl = w["centerline"]
+        if cl["kind"] == "segment":
+            pt(cl["a"])
+            pt(cl["b"])
+        else:
+            pt(cl["center"])
+            cl["radius"] *= k
+        w["thickness_m"]["value"] *= k
+    for o in d["openings"]:
+        if o["host_wall"] in walls:
+            o["offset_m"]["value"] *= k
+            o["width_m"]["value"] *= k
+    for r in d["rooms"]:
+        if on(r):
+            for p in r["polygon"]:
+                pt(p)
+            for h in r["holes"]:
+                for p in h:
+                    pt(p)
+    for c in d["columns"]:
+        if on(c):
+            for p in c["footprint"]:
+                pt(p)
+    for t in d["doc_transforms"]:
+        if page_id is None or f"{t['doc_id']}_p{t['page']}" == page_id:
+            t["matrix"] = [[v * k for v in row] for row in t["matrix"]]
+    return PlanGraph.model_validate(d)
+
+
+def resolve_conflict(
+    svc: Services, project_id: str, version_id: str, key: str, choice: int, *, user_id: str
+) -> str:
+    base_row = get_row(svc, project_id, version_id)
+    plan = load(svc, project_id, version_id)
+    idx = next((i for i, c in enumerate(plan.conflicts) if c.key == key), None)
+    if idx is None:
+        raise not_found("Conflict", key)
+    c = plan.conflicts[idx]
+    if not 0 <= choice < len(c.candidates):
+        raise ArchRenderError(
+            ErrorCode.VALIDATION,
+            f"Choice {choice} is not a candidate of {key}.",
+            "Pick one of the listed candidates.",
+        )
+    if key.startswith("scale/"):
+        used = float(c.candidates[c.proposed]["m_per_unit"])
+        chosen = float(c.candidates[choice]["m_per_unit"])
+        if abs(chosen - used) / used > 1e-9:
+            page_id = key.split("/", 1)[1]
+            sources = json.loads(base_row["extraction_json"]).get("sources", [])
+            level_name = next((s["level"] for s in sources if s["page"] == page_id), None)
+            level = (
+                None
+                if len(plan.levels) == 1
+                else next((lv.id for lv in plan.levels if lv.name == level_name), None)
+            )
+            if len(plan.levels) > 1 and level is None:
+                raise ArchRenderError(
+                    ErrorCode.CONFLICT,
+                    f"The level drawn on page {page_id} is not in this plan version.",
+                    "Re-extract the plan, then resolve the scale again.",
+                )
+            plan = rescale(plan, chosen / used, level=level, page_id=page_id)
+    plan.conflicts[idx] = c.model_copy(update={"resolved_by": user_id, "resolution": choice})
+    vid, _ = _insert(
+        svc,
+        project_id,
+        plan,
+        origin="edit",
+        parent=version_id,
+        root=base_row["root_id"],
+        extraction=json.loads(base_row["extraction_json"]),
+        user_id=user_id,
+    )
+    svc.db.execute(
+        "INSERT INTO plan_edits(id, project_id, from_version, to_version, patch_json, summary, created_by,"
+        " created_at) VALUES (?,?,?,?,?,?,?,?)",
+        (
+            new_id("ple"),
+            project_id,
+            version_id,
+            vid,
+            json.dumps([{"op": "resolve", "key": key, "choice": choice}]),
+            f"conflict {key}: candidate {choice}",
+            user_id,
+            now_iso(),
+        ),
+    )
+    return vid
+
+
+def approve(svc: Services, project_id: str, version_id: str, *, user_id: str) -> dict[str, Any]:
+    """Make ``version_id`` the project's approved plan (the previous one becomes superseded).
+    Refused while the plan has blocking issues. A superseded version may be approved again (the
+    documents went back to an earlier state)."""
+    row = get_row(svc, project_id, version_id)
+    if row["status"] == "approved":
+        return summary(row)
+    plan = load(svc, project_id, version_id)
+    blockers = blocking(validate_plan(plan))
+    if blockers:
+        what = [f"{i.code}: {i.message}" for i in blockers[:5]]
+        raise ArchRenderError(
+            ErrorCode.PLAN_INVALID,
+            "The plan cannot be approved yet: " + "; ".join(what),
+            "Fix the listed issues in the plan editor (or resolve the scale conflict), then approve.",
+        )
+    now = now_iso()
+    with svc.db.tx(immediate=True) as c:
+        c.execute(
+            "UPDATE plan_versions SET status = 'superseded' WHERE project_id = ? AND status = 'approved'",
+            (project_id,),
+        )
+        c.execute(
+            "UPDATE plan_versions SET status = 'approved', approved_by = ?, approved_at = ? WHERE id = ?",
+            (user_id, now, version_id),
+        )
+    _training_example(svc, project_id, version_id)
+    return summary(get_row(svc, project_id, version_id))
+
+
+def _training_example(svc: Services, project_id: str, version_id: str) -> None:
+    """The Gate A corrections between the extraction and the approved plan."""
+    row = get_row(svc, project_id, version_id)
+    root = str(row["root_id"])
+    if root == version_id:
+        return  # approved as extracted: nothing was corrected
+    if svc.db.one(
+        "SELECT 1 FROM training_examples WHERE plan_version = ? AND kind = 'plan_correction'",
+        (version_id,),
+    ):
+        return  # approved before (and superseded since)
+    chain = []
+    cur = version_id
+    while cur != root:
+        e = svc.db.one(
+            "SELECT from_version, patch_json, summary, created_by FROM plan_edits"
+            " WHERE to_version = ?",
+            (cur,),
+        )
+        if e is None:
+            break
+        chain.append(
+            {
+                "from": e["from_version"],
+                "to": cur,
+                "patch": json.loads(e["patch_json"]),
+                "summary": e["summary"],
+                "by": e["created_by"],
+            }
+        )
+        cur = e["from_version"]
+    extraction = json.loads(get_row(svc, project_id, root)["extraction_json"])
+    pages = [s["page"] for s in extraction.get("sources", [])]
+    svc.db.execute(
+        "INSERT INTO training_examples(id, project_id, kind, source_page, plan_version, payload_json,"
+        " training_use_allowed, created_at) VALUES (?,?,?,?,?,?,?,?)",
+        (
+            new_id("trx"),
+            project_id,
+            "plan_correction",
+            pages[0] if pages else None,
+            version_id,
+            json.dumps(
+                {
+                    "extraction_version": root,
+                    "approved_version": version_id,
+                    "edits": list(reversed(chain)),
+                    "pages": pages,
+                }
+            ),
+            0,
+            now_iso(),
+        ),
+    )
+
+
+def training_examples(svc: Services, project_id: str) -> list[dict[str, Any]]:
+    rows = svc.db.query(
+        "SELECT * FROM training_examples WHERE project_id = ? ORDER BY created_at", (project_id,)
+    )
+    return [
+        {
+            "id": r["id"],
+            "kind": r["kind"],
+            "source_page": r["source_page"],
+            "plan_version": r["plan_version"],
+            "payload": json.loads(r["payload_json"]),
+            "training_use_allowed": bool(r["training_use_allowed"]),
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]

@@ -36,7 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
-from tests.helpers import MINIMAL_DXF, upload_bytes  # noqa: E402
+from tests.helpers import plan_dxf, upload_bytes  # noqa: E402
 
 from archrender.core.config import Settings  # noqa: E402
 from archrender.core.ids import now_iso  # noqa: E402
@@ -92,7 +92,7 @@ def evaluate(args: argparse.Namespace, workdir: Path) -> dict[str, Any]:
         (now_iso(),),
     )
     worker = Worker(svc, ["cpu", "gpu"], name="eval")
-    upload_bytes(svc, "prj_eval", "Kat Planı.dxf", MINIMAL_DXF)
+    upload_bytes(svc, "prj_eval", "Kat Planı.dxf", plan_dxf())
     worker.run_until_idle()
 
     base = {

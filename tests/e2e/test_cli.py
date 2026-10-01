@@ -15,7 +15,7 @@ from archrender.cli.main import main
 from archrender.synth.layout import random_layout
 from archrender.synth.sheets import floor_plan_page, schedule_rows
 from tests.e2e.conftest import Live
-from tests.helpers import MINIMAL_DXF
+from tests.helpers import plan_dxf
 
 pytestmark = [pytest.mark.e2e, pytest.mark.blender]
 
@@ -28,7 +28,7 @@ def test_cli_full_flow(live: Live, tmp_path: Path, capsys: pytest.CaptureFixture
     pid = re.search(r"id: (prj_\w+)", capsys.readouterr().out).group(1)  # type: ignore[union-attr]
 
     plan = tmp_path / "Zemin Kat Planı.dxf"
-    plan.write_bytes(MINIMAL_DXF)
+    plan.write_bytes(plan_dxf())
     assert main([*base, "upload", pid, str(plan)]) == 0
     assert "(dxf)" in capsys.readouterr().out
 
@@ -64,6 +64,20 @@ def test_cli_full_flow(live: Live, tmp_path: Path, capsys: pytest.CaptureFixture
     assert main([*base, "download", run_id, "-o", str(dest)]) == 0
     with zipfile.ZipFile(dest) as zf:
         assert "qa/qa_report.html" in zf.namelist()
+
+    # Gate A from the CLI: list, show, edit (JSON Patch), approve
+    assert main([*base, "plan", "list", pid]) == 0
+    out = capsys.readouterr().out
+    v1 = re.search(r"(plv_\w+)\s+v1\s+draft\s+extraction", out).group(1)  # type: ignore[union-attr]
+    assert "dxf:" in out
+    assert main([*base, "plan", "show", pid, v1]) == 0
+    assert "source dxf" in capsys.readouterr().out
+    patch = tmp_path / "patch.json"
+    patch.write_text('[{"op": "replace", "path": "/rooms/0/name/value", "value": "Kiler"}]')
+    assert main([*base, "plan", "edit", pid, v1, "--patch", str(patch), "--note", "cli"]) == 0
+    v2 = re.search(r"(plv_\w+)\s+v2\s+draft\s+edit", capsys.readouterr().out).group(1)  # type: ignore[union-attr]
+    assert main([*base, "plan", "approve", pid, v2]) == 0
+    assert re.search(r"v2\s+approved", capsys.readouterr().out)
 
 
 def test_cli_reports_coded_errors(live: Live, capsys: pytest.CaptureFixture[str]) -> None:

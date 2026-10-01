@@ -17,9 +17,8 @@ from archrender.api.deps import CurrentUser, Svc, client_ip, project_access
 from archrender.api.security import audit
 from archrender.core.cas import CasRef
 from archrender.core.errors import ArchRenderError, ErrorCode, not_found
-from archrender.core.paths import check_sha256
-from archrender.pipeline.gates import decide
-from archrender.pipeline.run import RunConfig, create_run
+from archrender.core.paths import check_id, check_sha256
+from archrender.pipeline.run import RunConfig, create_run, decide_gate
 
 router = APIRouter(tags=["runs"])
 
@@ -29,6 +28,8 @@ SSE_MAX_SECONDS = 600.0
 class GateDecision(BaseModel):
     approve: bool
     notes: str | None = Field(default=None, max_length=2000)
+    # Gate A: the plan version to approve (default: the latest edit of the run's version)
+    plan_version: str | None = Field(default=None, max_length=64)
 
 
 def _run_row(svc: Svc, run_id: str) -> Any:
@@ -100,19 +101,29 @@ def get_run(run_id: str, user: CurrentUser, svc: Svc) -> dict[str, Any]:
 
 
 @router.post("/runs/{run_id}/gates/{gate}")
-def decide_gate(
+def gate_decision(
     run_id: str, gate: str, body: GateDecision, request: Request, user: CurrentUser, svc: Svc
 ) -> dict[str, Any]:
     row = _run_row(svc, run_id)
     project_access(svc, user, row["project_id"], "reviewer")
-    decide(svc.db, run_id, gate, approve=body.approve, user_id=user.id, notes=body.notes)
+    if body.plan_version is not None:
+        check_id(body.plan_version, "plan version id")
+    decide_gate(
+        svc,
+        run_id,
+        gate,
+        approve=body.approve,
+        user_id=user.id,
+        notes=body.notes,
+        plan_version=body.plan_version,
+    )
     svc.queue.resume(row["job_id"])
     audit(
         svc.db,
         user.id,
         "gate.approve" if body.approve else "gate.reject",
         f"{run_id}/{gate}",
-        {"notes": body.notes},
+        {"notes": body.notes, "plan_version": body.plan_version},
         client_ip(request),
     )
     return _run_view(svc, _run_row(svc, run_id))

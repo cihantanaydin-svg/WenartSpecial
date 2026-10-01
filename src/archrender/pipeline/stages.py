@@ -1,11 +1,12 @@
-"""Stage definitions (typed I/O, cached by the engine). Phase-1 set: S2(mock)…S9."""
+"""Stage definitions (typed I/O, cached by the engine): S4…S9. S1 and S2 live with their
+packages (``understand.stage``, ``plan.stage``)."""
 
 from __future__ import annotations
 
 import json
 import shutil
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import cv2
 import numpy as np
@@ -20,15 +21,13 @@ from archrender.core.errors import ArchRenderError, ErrorCode
 from archrender.core.hashing import sha256_json
 from archrender.core.schemas.brief import DesignBrief
 from archrender.core.schemas.common import Strict
-from archrender.core.schemas.plan import PlanGraph, ValidationIssue
+from archrender.core.schemas.plan import PlanGraph
 from archrender.core.schemas.provenance import Assumption
 from archrender.core.schemas.qa import ViewOutcome
 from archrender.core.schemas.scene import CameraSpec, RenderSettings, SceneSpec
 from archrender.core.schemas.section import Section
 from archrender.pipeline.engine import StageContext, StageDef
 from archrender.pipeline.services import Services
-from archrender.plan.mock import mock_plan
-from archrender.plan.validate import validate_plan
 from archrender.qa.images import decode, encode_jpeg, encode_png16
 from archrender.qa.policy import run_view_policy
 from archrender.qa.runner import QAContext
@@ -39,17 +38,6 @@ BLENDER_VERSION = "5.2.2"
 
 
 # ---- I/O models ------------------------------------------------------------------------------
-class PlanIn(Strict):
-    doc_shas: list[str]
-    extractor: Literal["mock"] = "mock"
-
-
-class PlanOut(Strict):
-    plan: PlanGraph
-    plan_json: CasRef
-    issues: list[ValidationIssue]
-
-
 class BriefIn(Strict):
     plan_version: str
     section: Section
@@ -155,15 +143,6 @@ def materialize_package(
 def build_stages(svc: Services) -> dict[str, StageDef[Any, Any]]:
     """Stage definitions bound to the service container (config subsets + model identities)."""
     prof = svc.profile
-
-    def s_plan(inp: PlanIn, ctx: StageContext) -> PlanOut:
-        plan = mock_plan(ctx.project_id, inp.doc_shas)
-        issues = validate_plan(plan)
-        plan = plan.model_copy(update={"issues": issues})
-        ref = ctx.store.put_bytes(
-            plan.model_dump_json(indent=1).encode(), "application/json", "plan.json"
-        )
-        return PlanOut(plan=plan, plan_json=ref, issues=issues)
 
     def s_brief(inp: BriefIn, ctx: StageContext) -> BriefOut:
         reg = AssumptionRegister("S4")
@@ -316,7 +295,6 @@ def build_stages(svc: Services) -> dict[str, StageDef[Any, Any]]:
         return [svc.models.ref(r) for r in ("refiner", "depth", "segmenter")]
 
     return {
-        "plan": StageDef("S2_plan", "1", PlanOut, s_plan),
         "brief": StageDef("S4_brief", "1", BriefOut, s_brief),
         "scene": StageDef(
             "S5_scene",
