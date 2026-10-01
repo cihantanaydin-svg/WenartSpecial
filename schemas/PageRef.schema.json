@@ -199,6 +199,17 @@
       ],
       "default": null
     },
+    "vectors": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CasRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "tiles": {
       "items": {
         "$ref": "#/$defs/Tile"

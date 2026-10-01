@@ -86,6 +86,7 @@ def _page_from_reply(
         raster=raster,
         words=blob("words", "application/json"),
         content=blob("content", "application/json"),
+        vectors=blob("vectors", "application/json"),
         tiles=tiles(w, h, s.tile_px, s.tile_overlap) if raster is not None and w and h else [],
         meta=meta,
     )
@@ -226,7 +227,7 @@ def _parse(
         )
         reply = {"pages": [{"index": 0, "kind": "text", "content": "p0_text.json", "meta": {}}]}
     elif kind == "ifc":
-        reply = {"pages": [{"index": 0, "kind": "ifc", "meta": _ifc_header(src)}]}
+        reply = run_task("ifc", {"path": str(src), "out": str(out)}, s, work)
     elif kind == "svg":
         reply = {"pages": [{"index": 0, "kind": "svg", "meta": {}}]}
     elif kind == "3dm":

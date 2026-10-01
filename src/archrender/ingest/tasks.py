@@ -26,7 +26,7 @@ import traceback
 import unicodedata
 import warnings
 import zipfile
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -201,6 +201,158 @@ def _pdf_vector_stats(page: Any) -> dict[str, Any]:
     }
 
 
+MAX_PATH_POINTS = 600_000
+
+
+def _mat_mul(m: tuple[float, ...], n: tuple[float, ...]) -> tuple[float, ...]:
+    """PDF matrices (a b c d e f): apply ``m`` then ``n``."""
+    a, b, c, d, e, f = m
+    a2, b2, c2, d2, e2, f2 = n
+    return (
+        a * a2 + b * c2,
+        a * b2 + b * d2,
+        c * a2 + d * c2,
+        c * b2 + d * d2,
+        e * a2 + f * c2 + e2,
+        e * b2 + f * d2 + f2,
+    )
+
+
+def _bezier(
+    p0: tuple[float, float],
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    p3: tuple[float, float],
+    n: int = 8,
+) -> list[tuple[float, float]]:
+    out = []
+    for k in range(1, n + 1):
+        t = k / n
+        u = 1 - t
+        out.append(
+            (
+                u**3 * p0[0] + 3 * u * u * t * p1[0] + 3 * u * t * t * p2[0] + t**3 * p3[0],
+                u**3 * p0[1] + 3 * u * u * t * p1[1] + 3 * u * t * t * p2[1] + t**3 * p3[1],
+            )
+        )
+    return out
+
+
+def _pdf_paths(
+    page: Any, to_px: Callable[[float, float], tuple[float, float]], px_per_pt: float
+) -> dict[str, Any]:
+    """Every path object of the page in page pixels (S2 input): sub-paths as polylines (Béziers
+    flattened, flagged ``curve``), closed flags, stroke width (px), fill/stroke, clipping, grey."""
+    import pypdfium2.raw as r
+
+    paths: list[dict[str, Any]] = []
+    total = 0
+    truncated = False
+    fx, fy = ctypes.c_float(), ctypes.c_float()
+    fill, stroke = ctypes.c_int(), ctypes.c_int()
+    width = ctypes.c_float()
+    rr, gg, bb, aa = ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint()
+
+    def matrix_of(obj: Any) -> tuple[float, ...]:
+        m = r.FS_MATRIX()
+        if r.FPDFPageObj_GetMatrix(obj, m):
+            return (m.a, m.b, m.c, m.d, m.e, m.f)
+        return (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+
+    def visit(obj: Any, parent: tuple[float, ...], depth: int) -> None:
+        nonlocal total, truncated
+        kind = r.FPDFPageObj_GetType(obj)
+        if kind == r.FPDF_PAGEOBJ_FORM and depth < 8:
+            m = _mat_mul(matrix_of(obj), parent)
+            for k in range(r.FPDFFormObj_CountObjects(obj)):
+                visit(r.FPDFFormObj_GetObject(obj, k), m, depth + 1)
+            return
+        if kind != r.FPDF_PAGEOBJ_PATH or truncated:
+            return
+        m = _mat_mul(matrix_of(obj), parent)
+
+        def tx(x: float, y: float) -> tuple[float, float]:
+            ux = m[0] * x + m[2] * y + m[4]
+            uy = m[1] * x + m[3] * y + m[5]
+            px, py = to_px(ux, uy)
+            return round(px, 3), round(py, 3)
+
+        subpaths: list[list[tuple[float, float]]] = []
+        closed: list[bool] = []
+        curve: list[bool] = []
+        cur: list[tuple[float, float]] = []
+        cur_curve = False
+        bez: list[tuple[float, float]] = []
+
+        def flush(is_closed: bool) -> None:
+            nonlocal cur, cur_curve
+            if len(cur) > 1:
+                subpaths.append(cur)
+                closed.append(is_closed)
+                curve.append(cur_curve)
+            cur, cur_curve = [], False
+
+        for k in range(max(0, r.FPDFPath_CountSegments(obj))):
+            seg = r.FPDFPath_GetPathSegment(obj, k)
+            if not r.FPDFPathSegment_GetPoint(seg, fx, fy):
+                continue
+            p = tx(fx.value, fy.value)
+            t = r.FPDFPathSegment_GetType(seg)
+            if t == r.FPDF_SEGMENT_MOVETO:
+                flush(False)
+                cur = [p]
+            elif t == r.FPDF_SEGMENT_BEZIERTO:
+                bez.append(p)
+                if len(bez) == 3:
+                    if cur:
+                        cur += _bezier(cur[-1], bez[0], bez[1], bez[2])
+                        cur_curve = True
+                    bez = []
+            else:
+                cur.append(p)
+            if r.FPDFPathSegment_GetClose(seg):
+                start_pt = cur[0] if cur else None
+                flush(True)
+                if start_pt is not None:  # a following lineto starts at the closed sub-path's start
+                    cur = [start_pt]
+        flush(False)
+        if not subpaths:
+            return
+        total += sum(len(s) for s in subpaths)
+        if total > MAX_PATH_POINTS:
+            truncated = True
+            return
+        r.FPDFPath_GetDrawMode(obj, fill, stroke)
+        w = float(width.value) if r.FPDFPageObj_GetStrokeWidth(obj, width) else 0.0
+        scale = math.sqrt(abs(m[0] * m[3] - m[1] * m[2])) or 1.0
+        grey = None
+        if r.FPDFPageObj_GetStrokeColor(obj, rr, gg, bb, aa):
+            grey = round((0.299 * rr.value + 0.587 * gg.value + 0.114 * bb.value) / 255, 3)
+        fill_grey = None
+        if fill.value and r.FPDFPageObj_GetFillColor(obj, rr, gg, bb, aa):
+            fill_grey = round((0.299 * rr.value + 0.587 * gg.value + 0.114 * bb.value) / 255, 3)
+        clip = r.FPDFPageObj_GetClipPath(obj)
+        clipped = bool(clip) and r.FPDFClipPath_CountPaths(clip) > 0
+        paths.append(
+            {
+                "sub": [[list(q) for q in s] for s in subpaths],
+                "closed": closed,
+                "curve": curve,
+                "w": round(w * scale * px_per_pt, 3),
+                "fill": bool(fill.value),
+                "stroke": bool(stroke.value),
+                "grey": grey,
+                "fill_grey": fill_grey,
+                "clip": clipped,
+            }
+        )
+
+    identity = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    for k in range(r.FPDFPage_CountObjects(page.raw)):
+        visit(r.FPDFPage_GetObject(page.raw, k), identity, 0)
+    return {"paths": paths, "truncated": truncated, "frame": "page_px"}
+
+
 def task_pdf(req: dict[str, Any]) -> Reply:
     import pypdfium2 as pdfium
 
@@ -249,6 +401,7 @@ def task_pdf(req: dict[str, Any]) -> Reply:
         to_px = _page_to_px(page, img.width, img.height)
         words = _pdf_words(page, textpage, to_px)
         stats = _pdf_vector_stats(page)
+        vectors = _pdf_paths(page, to_px, dpi / 72.0)
         rotation = page.get_rotation()
         meta: dict[str, Any] = {"rotation": rotation, "char_count": textpage.count_chars()}
         if reduced:
@@ -270,6 +423,7 @@ def task_pdf(req: dict[str, Any]) -> Reply:
                 "preview": _preview(img, out, f"p{i}_preview.png"),
                 "words": _write_json(out, f"p{i}_words.json", words),
                 "content": _write_json(out, f"p{i}_vector.json", stats),
+                "vectors": _write_json(out, f"p{i}_paths.json", vectors),
                 "meta": meta,
             }
         )
@@ -495,6 +649,117 @@ def _repair_zero_handles(src: Path, out: Path) -> tuple[Path, int]:
     return dest, fixed
 
 
+MAX_DXF_ENTITIES = 200_000
+
+
+def _dxf_entities(msp: Any) -> dict[str, Any]:
+    """Drawable entities in drawing units (S2 input): polylines (arcs/bulges flattened and flagged),
+    arcs and circles with their parameters, hatch boundaries, and dimensions with their measured
+    points and value. Block references are exploded; entities on layer "0" inside a block take the
+    insert's layer."""
+    from ezdxf import path as ezpath
+    from ezdxf.entities.dimension import Dimension
+
+    lines: list[dict[str, Any]] = []
+    arcs: list[dict[str, Any]] = []
+    hatches: list[dict[str, Any]] = []
+    dims: list[dict[str, Any]] = []
+    truncated = False
+
+    def flat(ent: Any) -> list[list[float]]:
+        p = ezpath.make_path(ent)
+        ext = p.bbox()
+        diag = (ext.size.x**2 + ext.size.y**2) ** 0.5 if ext.has_data else 1.0
+        return [[round(v.x, 6), round(v.y, 6)] for v in p.flattening(max(diag * 2e-4, 1e-9))]
+
+    def add(ent: Any, layer: str, depth: int) -> None:
+        nonlocal truncated
+        if len(lines) + len(arcs) + len(hatches) + len(dims) >= MAX_DXF_ENTITIES:
+            truncated = True
+            return
+        t = ent.dxftype()
+        own = ent.dxf.get("layer", "0")
+        lay = layer if own == "0" and depth > 0 else own
+        try:
+            if t == "INSERT":
+                if depth < 4:
+                    for sub in ent.virtual_entities():
+                        add(sub, lay, depth + 1)
+            elif t == "LINE":
+                s, e = ent.dxf.start, ent.dxf.end
+                lines.append({"pts": [[s.x, s.y], [e.x, e.y]], "closed": False, "layer": lay})
+            elif t in ("LWPOLYLINE", "POLYLINE"):
+                curved = t == "LWPOLYLINE" and any(
+                    abs(b) > 1e-12 for *_, b in ent.get_points("xyb")
+                )
+                closed = bool(ent.closed) if t == "LWPOLYLINE" else bool(ent.is_closed)
+                pts = flat(ent)
+                if closed and len(pts) > 2 and pts[0] == pts[-1]:
+                    pts = pts[:-1]
+                lines.append({"pts": pts, "closed": closed, "curve": curved, "layer": lay})
+            elif t == "ARC":
+                c = ent.dxf.center
+                arcs.append(
+                    {
+                        "c": [c.x, c.y],
+                        "r": ent.dxf.radius,
+                        "a0": ent.dxf.start_angle,
+                        "a1": ent.dxf.end_angle,
+                        "layer": lay,
+                    }
+                )
+            elif t == "CIRCLE":
+                c = ent.dxf.center
+                arcs.append(
+                    {"c": [c.x, c.y], "r": ent.dxf.radius, "a0": 0.0, "a1": 360.0, "layer": lay}
+                )
+            elif t in ("ELLIPSE", "SPLINE", "SOLID", "TRACE", "3DFACE"):
+                lines.append(
+                    {
+                        "pts": flat(ent),
+                        "closed": t != "SPLINE",
+                        "curve": True,
+                        "kind": t,
+                        "layer": lay,
+                    }
+                )
+            elif t == "HATCH":
+                loops = []
+                for bp in ent.paths:
+                    hp = ezpath.from_hatch_boundary_path(bp)
+                    loops.append([[round(v.x, 6), round(v.y, 6)] for v in hp.flattening(1e-3)])
+                hatches.append(
+                    {
+                        "loops": loops,
+                        "solid": bool(ent.dxf.solid_fill),
+                        "pattern": ent.dxf.get("pattern_name", ""),
+                        "layer": lay,
+                    }
+                )
+            elif isinstance(ent, Dimension):
+                d = ent.dxf
+                p2, p3 = d.get("defpoint2"), d.get("defpoint3")
+                dims.append(
+                    {
+                        "type": int(ent.dimtype & 7),
+                        "p1": [p2.x, p2.y] if p2 is not None else None,
+                        "p2": [p3.x, p3.y] if p3 is not None else None,
+                        "line": [d.defpoint.x, d.defpoint.y],
+                        "measurement": float(ent.get_measurement())
+                        if ent.dimtype & 7 in (0, 1)
+                        else None,
+                        "text": d.get("text", ""),
+                        "layer": lay,
+                    }
+                )
+        except (ValueError, TypeError, AttributeError, ZeroDivisionError):
+            return  # malformed entity: skipped (the summary still counts it)
+
+    for ent in msp:
+        add(ent, "0", 0)
+    return {"lines": lines, "arcs": arcs, "hatches": hatches, "dims": dims, "truncated": truncated}
+
+
 def task_dxf(req: dict[str, Any]) -> Reply:
     from ezdxf import recover
     from ezdxf.addons.drawing.frontend import Frontend
@@ -604,6 +869,7 @@ def task_dxf(req: dict[str, Any]) -> Reply:
             summary["extents"] = [bbox.extmin.x, bbox.extmin.y, bbox.extmax.x, bbox.extmax.y]
             summary["raster_scale_px_per_unit"] = be.scale
     page["content"] = _write_json(out, "p0_dxf.json", summary)
+    page["vectors"] = _write_json(out, "p0_entities.json", _dxf_entities(msp))
     reply["pages"].append(page)
     reply["meta"] = {"dxfversion": doc.dxfversion, "insunits": insunits, "entity_count": count}
     return reply
@@ -873,6 +1139,266 @@ def task_zip_names(req: dict[str, Any]) -> Reply:
     return reply
 
 
+# ---------------------------------------------------------------------------------------------
+# IFC (IfcOpenShell): storeys, walls, openings, spaces in metres (S2 reads the JSON)
+# ---------------------------------------------------------------------------------------------
+def _ifc_profile_points(item: Any, scale: float) -> list[tuple[float, float, float]]:
+    """Footprint points of an extruded solid in its object's local frame (metres)."""
+    import ifcopenshell.util.placement as ifc_placement
+
+    if item.is_a("IfcMappedItem"):
+        src = item.MappingSource
+        pts: list[tuple[float, float, float]] = []
+        for sub in src.MappedRepresentation.Items:
+            pts += _ifc_profile_points(sub, scale)
+        return pts
+    if not item.is_a("IfcExtrudedAreaSolid"):
+        return []
+    prof = item.SweptArea
+    local: list[tuple[float, float]] = []
+    if prof.is_a("IfcRectangleProfileDef"):
+        hx, hy = prof.XDim / 2, prof.YDim / 2
+        local = [(-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy)]
+        if prof.Position is not None:
+            m2 = ifc_placement.get_axis2placement(prof.Position)
+            local = [
+                (m2[0, 0] * x + m2[0, 1] * y + m2[0, 3], m2[1, 0] * x + m2[1, 1] * y + m2[1, 3])
+                for x, y in local
+            ]
+    elif prof.is_a("IfcArbitraryClosedProfileDef"):
+        curve = prof.OuterCurve
+        if curve.is_a("IfcPolyline"):
+            local = [(p.Coordinates[0], p.Coordinates[1]) for p in curve.Points]
+        elif curve.is_a("IfcIndexedPolyCurve"):
+            local = [(c[0], c[1]) for c in curve.Points.CoordList]
+    if not local:
+        return []
+    m = ifc_placement.get_axis2placement(item.Position) if item.Position is not None else np.eye(4)
+    out = []
+    for x, y in local:
+        v = m @ np.array([x, y, 0.0, 1.0])
+        out.append((float(v[0]) * scale, float(v[1]) * scale, float(v[2]) * scale))
+    return out
+
+
+def _ifc_curve_points(item: Any) -> list[tuple[float, float]]:
+    if item.is_a("IfcPolyline"):
+        return [(p.Coordinates[0], p.Coordinates[1]) for p in item.Points]
+    if item.is_a("IfcIndexedPolyCurve"):
+        return [(c[0], c[1]) for c in item.Points.CoordList]
+    if item.is_a("IfcTrimmedCurve") and item.BasisCurve.is_a("IfcLine"):
+        a = item.Trim1[0] if item.Trim1 and item.Trim1[0].is_a("IfcCartesianPoint") else None
+        b = item.Trim2[0] if item.Trim2 and item.Trim2[0].is_a("IfcCartesianPoint") else None
+        if a is not None and b is not None:
+            return [tuple(a.Coordinates[:2]), tuple(b.Coordinates[:2])]
+    return []
+
+
+def _ifc_world(
+    m: np.ndarray, pts: Sequence[tuple[float, ...]], scale: float, z: float = 0.0
+) -> list[list[float]]:
+    out = []
+    for p in pts:
+        v = m @ np.array([p[0], p[1], p[2] if len(p) > 2 else z, 1.0])
+        out.append([round(float(v[0]) * scale, 6), round(float(v[1]) * scale, 6)])
+    return out
+
+
+def task_ifc(req: dict[str, Any]) -> Reply:
+    import ifcopenshell
+    import ifcopenshell.util.element as ifc_element
+    import ifcopenshell.util.placement as ifc_placement
+    import ifcopenshell.util.unit as ifc_unit
+
+    src, out = Path(req["path"]), Path(req["out"])
+    try:
+        f = ifcopenshell.open(str(src))
+    except Exception as e:  # IfcOpenShell raises generic errors for malformed files
+        raise ArchRenderError(
+            ErrorCode.INGEST_CORRUPT,
+            f"The IFC file cannot be read ({type(e).__name__}: {str(e)[:200]}).",
+            "Re-export the model as IFC4 or IFC2X3 from the BIM application.",
+        ) from e
+    scale = float(ifc_unit.calculate_unit_scale(f))
+
+    def placement(el: Any) -> np.ndarray:
+        if el.ObjectPlacement is None:
+            return np.eye(4)
+        m = np.array(ifc_placement.get_local_placement(el.ObjectPlacement), np.float64)
+        return m
+
+    def storey_of(el: Any) -> str | None:
+        c: Any = ifc_element.get_container(el) or ifc_element.get_aggregate(el)
+        while c is not None and not c.is_a("IfcBuildingStorey"):
+            c = ifc_element.get_aggregate(c)
+        return c.GlobalId if c is not None else None
+
+    def reps(el: Any) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        if el.Representation is not None:
+            for r_ in el.Representation.Representations:
+                out[r_.RepresentationIdentifier or ""] = r_
+        return out
+
+    def by_type(name: str) -> list[Any]:
+        return list(f.by_type(name))
+
+    storeys = []
+    for st in by_type("IfcBuildingStorey"):
+        m = placement(st)
+        elev = st.Elevation * scale if st.Elevation is not None else float(m[2, 3]) * scale
+        storeys.append(
+            {"id": st.GlobalId, "name": st.Name or st.LongName or "", "elevation_m": round(elev, 4)}
+        )
+    walls = []
+    for w in by_type("IfcWall"):
+        m = placement(w)
+        rr = reps(w)
+        thickness = None
+        offset = 0.0
+        mat: Any = ifc_element.get_material(w)
+        if mat is not None and mat.is_a("IfcMaterialLayerSetUsage"):
+            thickness = (
+                sum(layer.LayerThickness for layer in mat.ForLayerSet.MaterialLayers) * scale
+            )
+            sense = 1.0 if mat.DirectionSense == "POSITIVE" else -1.0
+            offset = (mat.OffsetFromReferenceLine or 0.0) * scale + sense * thickness / 2
+        axis: list[list[float]] = []
+        if "Axis" in rr and rr["Axis"].Items:
+            local = _ifc_curve_points(rr["Axis"].Items[0])
+            # the centerline is the axis moved by the layer offset along local +y
+            local = [(x, y + offset / scale) for x, y in local]
+            axis = _ifc_world(m, [(x, y) for x, y in local], scale)
+        footprint: list[list[float]] = []
+        height = None
+        if "Body" in rr:
+            pts: list[tuple[float, float, float]] = []
+            for item in rr["Body"].Items:
+                pts += _ifc_profile_points(item, scale)
+                if item.is_a("IfcExtrudedAreaSolid"):
+                    height = item.Depth * scale
+            footprint = _ifc_world(m, [(x / scale, y / scale, z / scale) for x, y, z in pts], scale)
+        walls.append(
+            {
+                "id": w.GlobalId,
+                "name": w.Name,
+                "storey": storey_of(w),
+                "axis": axis,
+                "thickness_m": thickness,
+                "height_m": height,
+                "footprint": footprint,
+                "external": bool(
+                    (ifc_element.get_psets(w).get("Pset_WallCommon") or {}).get("IsExternal")
+                ),
+            }
+        )
+    openings = []
+    for rel in by_type("IfcRelVoidsElement"):
+        op, host = rel.RelatedOpeningElement, rel.RelatingBuildingElement
+        fill = None
+        for rf in getattr(op, "HasFillings", None) or []:
+            fill = rf.RelatedBuildingElement
+        m = placement(op)
+        pts = []
+        for r_ in reps(op).values():
+            for item in r_.Items:
+                pts += _ifc_profile_points(item, scale)
+        center_local = (0.0, 0.0, 0.0)
+        if pts:  # bounding-box centre (profiles repeat their first point)
+            xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+            center_local = ((min(xs) + max(xs)) / 2 / scale, (min(ys) + max(ys)) / 2 / scale, 0.0)
+        center = _ifc_world(m, [center_local], scale)[0]
+        x_dir = [float(m[0, 0]), float(m[1, 0])]
+        y_dir = [float(m[0, 1]), float(m[1, 1])]
+        width = height = None
+        kind = "opening"
+        tag = None
+        operation = None
+        if fill is not None:
+            kind = (
+                "door"
+                if fill.is_a("IfcDoor")
+                else "window"
+                if fill.is_a("IfcWindow")
+                else "opening"
+            )
+            width = fill.OverallWidth * scale if fill.OverallWidth else None
+            height = fill.OverallHeight * scale if fill.OverallHeight else None
+            tag = fill.Tag or fill.Name
+            operation = getattr(fill, "OperationType", None) or getattr(
+                fill, "PredefinedType", None
+            )
+            fm = placement(fill)
+            x_dir = [float(fm[0, 0]), float(fm[1, 0])]
+            y_dir = [float(fm[0, 1]), float(fm[1, 1])]
+        if width is None and pts:
+            xs = [p[0] for p in pts]
+            width = max(xs) - min(xs)
+        openings.append(
+            {
+                "id": op.GlobalId,
+                "host": host.GlobalId,
+                "kind": kind,
+                "center": center,
+                "z_m": round(float(m[2, 3]) * scale, 4),
+                "width_m": width,
+                "height_m": height,
+                "tag": tag,
+                "operation": operation,
+                "x_dir": x_dir,
+                "y_dir": y_dir,
+            }
+        )
+    spaces = []
+    for sp in by_type("IfcSpace"):
+        m = placement(sp)
+        pts = []
+        height = None
+        for r_ in reps(sp).values():
+            for item in r_.Items:
+                pts += _ifc_profile_points(item, scale)
+                if item.is_a("IfcExtrudedAreaSolid"):
+                    height = item.Depth * scale
+        qto = ifc_element.get_psets(sp, qtos_only=True).get("Qto_SpaceBaseQuantities", {})
+        spaces.append(
+            {
+                "id": sp.GlobalId,
+                "number": sp.Name,
+                "name": sp.LongName or sp.Name,
+                "storey": storey_of(sp),
+                "footprint": _ifc_world(
+                    m, [(x / scale, y / scale, z / scale) for x, y, z in pts], scale
+                ),
+                "net_area_m2": qto.get("NetFloorArea"),
+                "height_m": height,
+            }
+        )
+    model = {
+        "schema": f.schema,
+        "unit_scale": scale,
+        "storeys": storeys,
+        "walls": walls,
+        "openings": openings,
+        "spaces": spaces,
+    }
+    reply = _empty_reply()
+    reply["pages"].append(
+        {
+            "index": 0,
+            "kind": "ifc",
+            "meta": {
+                "schema": f.schema,
+                "walls": len(walls),
+                "spaces": len(spaces),
+                "storeys": len(storeys),
+            },
+            "vectors": _write_json(out, "p0_ifc.json", model),
+        }
+    )
+    reply["meta"] = {"schema": f.schema}
+    return reply
+
+
 TASKS: dict[str, Callable[[dict[str, Any]], Reply]] = {
     "pdf": task_pdf,
     "image": task_image,
@@ -882,6 +1408,7 @@ TASKS: dict[str, Callable[[dict[str, Any]], Reply]] = {
     "pptx": task_pptx,
     "unzip": task_unzip,
     "zip_names": task_zip_names,
+    "ifc": task_ifc,
 }
 
 

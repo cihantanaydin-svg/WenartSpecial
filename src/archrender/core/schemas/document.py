@@ -58,6 +58,7 @@ class PageRef(Strict):
     raster: CasRef | None = None  # sRGB PNG
     words: CasRef | None = None  # JSON list[Word] (text layer / DXF text / office text)
     content: CasRef | None = None  # kind-specific JSON (vector stats, DXF summary, table cells …)
+    vectors: CasRef | None = None  # drawing primitives for S2 (PDF paths, DXF entities, IFC model)
     tiles: list[Tile] = Field(default_factory=list)
     meta: dict[str, Any] = Field(default_factory=dict)
 
