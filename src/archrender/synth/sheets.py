@@ -20,9 +20,11 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as rl_canvas
+from shapely.geometry.polygon import orient
 
 from archrender.assets import font_path
-from archrender.synth.layout import Layout, opening_point, random_layout
+from archrender.synth.layout import Layout, random_layout
+from archrender.synth.plan import PlanSpec, from_layout, wall_solid
 
 GT_DPI = 300.0
 MM = 72.0 / 25.4
@@ -258,7 +260,7 @@ def scale_bar(sh: Sheet, x: float, y: float, scale: int) -> None:
 # ---------------------------------------------------------------------------------------------
 @dataclass
 class PlanFrame:
-    ox: float  # sheet points of world (0, 0)
+    ox: float  # sheet points of plan (0, 0)
     oy: float
     scale: int
 
@@ -268,6 +270,11 @@ class PlanFrame:
 
     def d(self, v: float) -> float:
         return v * 1000.0 / self.scale * MM
+
+    def to_page_px(self, sh: Sheet) -> list[list[float]]:
+        """Affine plan metres → page pixels at GT_DPI (y down): [[a, b, c], [d, e, f]]."""
+        f = 1000.0 / self.scale * MM * sh.k
+        return [[f, 0.0, self.ox * sh.k], [0.0, -f, (sh.h_mm * MM - self.oy) * sh.k]]
 
 
 def _fit_plan(
@@ -281,62 +288,64 @@ def _fit_plan(
     return None
 
 
-def _wall_pieces(layout: Layout, wi: int) -> list[tuple[float, float]]:
-    w = layout.walls[wi]
-    cuts = sorted((o.t - o.width / 2, o.t + o.width / 2) for o in layout.openings if o.wall == wi)
-    ext = w.thickness / 2 if w.exterior else 0.0
-    pieces, start = [], -ext
-    for a, b in cuts:
-        pieces.append((start, a))
-        start = b
-    pieces.append((start, w.length + ext))
-    return [(a, b) for a, b in pieces if b - a > 1e-6]
+def _rings(geom: Any) -> list[list[tuple[float, float]]]:
+    polys = list(geom.geoms) if hasattr(geom, "geoms") else [geom]
+    out = []
+    for p in polys:
+        if p.is_empty:
+            continue
+        p = orient(p)
+        out.append(list(p.exterior.coords)[:-1])
+        out += [list(h.coords)[:-1] for h in p.interiors]
+    return out
 
 
-def _wall_rect(layout: Layout, wi: int, a: float, b: float) -> list[tuple[float, float]]:
-    w = layout.walls[wi]
-    ux, uy = (w.bx - w.ax) / w.length, (w.by - w.ay) / w.length
-    nx, ny = -uy, ux
-    t = w.thickness / 2
-    p0 = (w.ax + ux * a, w.ay + uy * a)
-    p1 = (w.ax + ux * b, w.ay + uy * b)
-    return [
-        (p0[0] + nx * t, p0[1] + ny * t),
-        (p1[0] + nx * t, p1[1] + ny * t),
-        (p1[0] - nx * t, p1[1] - ny * t),
-        (p0[0] - nx * t, p0[1] - ny * t),
-    ]
-
-
-def _poly(
-    sh: Sheet, fr: PlanFrame, pts: list[tuple[float, float]], *, stroke: int = 1, fill: int = 1
-) -> None:
+def _path(sh: Sheet, fr: PlanFrame, rings: list[list[tuple[float, float]]]) -> Any:
     p = sh.c.beginPath()
-    p.moveTo(*fr.p(*pts[0]))
-    for q in pts[1:]:
-        p.lineTo(*fr.p(*q))
-    p.close()
-    sh.c.drawPath(p, stroke=stroke, fill=fill)
+    for ring in rings:
+        p.moveTo(*fr.p(*ring[0]))
+        for q in ring[1:]:
+            p.lineTo(*fr.p(*q))
+        p.close()
+    return p
 
 
-def draw_walls(sh: Sheet, fr: PlanFrame, layout: Layout, style: str) -> None:
+WALL_STYLES = ["solid", "solid", "grey", "hatch", "outline"]
+
+
+def draw_walls(sh: Sheet, fr: PlanFrame, spec: PlanSpec, style: str) -> None:
+    """Wall bodies with the opening gaps cut, as one cleaned outline (no lines across junctions)."""
     c = sh.c
+    rings = _rings(wall_solid(spec, cut_openings=True))
     c.setLineWidth(0.6)
-    grey = {"solid": 0.0, "grey": 0.55, "outline": 1.0}.get(style, 0.0)
-    c.setFillGray(grey)
-    for wi in range(len(layout.walls)):
-        for a, b in _wall_pieces(layout, wi):
-            _poly(sh, fr, _wall_rect(layout, wi, a, b), fill=0 if style == "outline" else 1)
-    c.setFillGray(0.0)
+    if style in ("solid", "grey"):
+        c.setFillGray(0.0 if style == "solid" else 0.55)
+        c.drawPath(_path(sh, fr, rings), stroke=1, fill=1)
+        c.setFillGray(0.0)
+        return
+    c.drawPath(_path(sh, fr, rings), stroke=1, fill=0)
+    if style == "hatch":  # 45° poché lines, clipped to the walls
+        c.saveState()
+        c.clipPath(_path(sh, fr, rings), stroke=0, fill=0)
+        c.setLineWidth(0.2)
+        x0, y0, x1, y1 = spec.extent()
+        a0, b0 = fr.p(x0 - 1, y0 - 1)
+        a1, b1 = fr.p(x1 + 1, y1 + 1)
+        step = 1.3 * MM
+        u = a0 - (b1 - b0)
+        while u < a1:
+            c.line(u, b0, u + (b1 - b0), b1)
+            u += step
+        c.restoreState()
 
 
-def draw_openings(sh: Sheet, fr: PlanFrame, layout: Layout, *, swings: bool) -> None:
+def draw_openings(sh: Sheet, fr: PlanFrame, spec: PlanSpec, *, swings: bool) -> None:
     c = sh.c
-    for o in layout.openings:
-        w = layout.walls[o.wall]
-        ux, uy = (w.bx - w.ax) / w.length, (w.by - w.ay) / w.length
+    for o in spec.openings:
+        w = spec.walls[o.wall]
+        ux, uy = w.direction(o.t)
         nx, ny = -uy * o.swing, ux * o.swing
-        cx, cy = opening_point(layout, o)
+        cx, cy = w.point(o.t)
         t = w.thickness / 2
         if o.kind == "window":
             c.setLineWidth(0.35)
@@ -345,11 +354,12 @@ def draw_openings(sh: Sheet, fr: PlanFrame, layout: Layout, *, swings: bool) -> 
                 b = (cx + ux * o.width / 2 - uy * off, cy + uy * o.width / 2 + ux * off)
                 c.line(*fr.p(*a), *fr.p(*b))
             continue
-        # door: jambs, leaf and swing arc
-        hinge = (cx - ux * o.width / 2, cy - uy * o.width / 2)
+        # door: jambs, leaf and swing arc; the hinge is at the wall-start side of the gap
+        s = -1.0 if o.hinge == "start" else 1.0
+        hinge = (cx + s * ux * o.width / 2, cy + s * uy * o.width / 2)
         c.setLineWidth(0.3)
-        for s in (-1, 1):
-            j = (cx + s * ux * o.width / 2, cy + s * uy * o.width / 2)
+        for k in (-1, 1):
+            j = (cx + k * ux * o.width / 2, cy + k * uy * o.width / 2)
             c.line(*fr.p(j[0] - nx * t, j[1] - ny * t), *fr.p(j[0] + nx * t, j[1] + ny * t))
         if not swings:
             continue
@@ -357,7 +367,8 @@ def draw_openings(sh: Sheet, fr: PlanFrame, layout: Layout, *, swings: bool) -> 
         c.setLineWidth(0.6)
         c.line(*fr.p(*hinge), *fr.p(*leaf_end))
         c.setLineWidth(0.25)
-        a0 = math.degrees(math.atan2(uy, ux))
+        closed = (-s * ux, -s * uy)  # from the hinge along the wall to the other jamb
+        a0 = math.degrees(math.atan2(closed[1], closed[0]))
         a1 = math.degrees(math.atan2(ny, nx))
         extent = (a1 - a0 + 180) % 360 - 180
         hx, hy = fr.p(*hinge)
@@ -365,21 +376,24 @@ def draw_openings(sh: Sheet, fr: PlanFrame, layout: Layout, *, swings: bool) -> 
         c.arc(hx - r, hy - r, hx + r, hy + r, a0, extent)
 
 
-def draw_tags(sh: Sheet, fr: PlanFrame, layout: Layout, rng: np.random.Generator) -> None:
+def draw_tags(sh: Sheet, fr: PlanFrame, spec: PlanSpec, rng: np.random.Generator) -> None:
     c = sh.c
     tags = []
-    for o in layout.openings:
-        w = layout.walls[o.wall]
-        ux, uy = (w.bx - w.ax) / w.length, (w.by - w.ay) / w.length
+    xs = [p[0] for w in spec.walls for p in w.polyline()]
+    ys = [p[1] for w in spec.walls for p in w.polyline()]
+    mid = ((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)
+    for o in spec.openings:
+        w = spec.walls[o.wall]
+        ux, uy = w.direction(o.t)
         nx, ny = -uy, ux
-        cx, cy = opening_point(layout, o)
+        cx, cy = w.point(o.t)
         off = 0.75 if o.kind == "window" else -0.55
-        if w.exterior and o.kind == "window":
-            # outward normal of the facade
-            mx, my = layout.width / 2, layout.depth / 2
-            if (cx + nx - mx) ** 2 + (cy + ny - my) ** 2 < (cx - mx) ** 2 + (cy - my) ** 2:
-                nx, ny = -nx, -ny
-        tx, ty = fr.p(cx + nx * off + ux * 0.0, cy + ny * off)
+        inward = math.hypot(cx + nx - mid[0], cy + ny - mid[1]) < math.hypot(
+            cx - mid[0], cy - mid[1]
+        )
+        if w.exterior and o.kind == "window" and inward:  # tag on the outward side of the facade
+            nx, ny = -nx, -ny
+        tx, ty = fr.p(cx + nx * off, cy + ny * off)
         r = 3.2 * MM
         c.setLineWidth(0.4)
         if o.kind == "window":
@@ -394,7 +408,7 @@ def draw_tags(sh: Sheet, fr: PlanFrame, layout: Layout, rng: np.random.Generator
 def draw_room_labels(
     sh: Sheet,
     fr: PlanFrame,
-    layout: Layout,
+    spec: PlanSpec,
     rng: np.random.Generator,
     lang: str,
     *,
@@ -403,27 +417,27 @@ def draw_room_labels(
 ) -> None:
     rooms = []
     area_style = rng.choice(["comma", "dot"]) if lang == "en" else "comma"
-    for i, r in enumerate(layout.rooms):
-        x, y = fr.p(*r.center)
+    for i, r in enumerate(spec.rooms):
+        x, y = fr.p(*r.label)
         name = r.name.upper() if rng.random() < 0.4 else r.name
         if room_numbers:  # matches the finish schedule's "MAHAL NO" (Z01, Z02, …)
             sh.text(x, y + 13, room_number(i), 7.5, anchor="center", role=f"tag:{room_number(i)}")
         sh.text(x, y + 2, name, 8.5, font="bold", anchor="center", role="room_name")
+        area = round(spec.faces[r.id].area, 2)  # net floor area, wall face to wall face
         if ceiling:
-            height = 2.8 if r.name not in ("Banyo", "WC", "Bathroom") else 2.4
-            label = "+" + fmt_m(height, "comma" if lang == "tr" else "dot")
+            label = "+" + fmt_m(r.ceiling, "comma" if lang == "tr" else "dot")
             sh.text(x, y - 9, label, 7, anchor="center", role="ceiling_height")
         else:
             unit = "m²" if rng.random() < 0.7 else "m2"
             sh.text(
                 x,
                 y - 9,
-                f"{fmt_m(r.area, str(area_style))} {unit}",
+                f"{fmt_m(area, str(area_style))} {unit}",
                 7,
                 anchor="center",
                 role="room_area",
             )
-        rooms.append({"id": r.id, "name": r.name, "area_m2": round(r.area, 2)})
+        rooms.append({"id": r.id, "name": r.name, "area_m2": area, "ceiling_m": r.ceiling})
     sh.gt["rooms"] = rooms
 
 
@@ -435,70 +449,154 @@ def _dim_line(
     sh: Sheet,
     a: tuple[float, float],
     b: tuple[float, float],
-    offset_dir: tuple[float, float],
+    offset: tuple[float, float],
     value: float,
     style: str,
     fr: PlanFrame,
 ) -> None:
+    """Aligned dimension from plan point a to b, drawn at ``offset`` (plan metres) from them."""
     c = sh.c
     c.setLineWidth(0.25)
-    ox, oy = offset_dir
+    ox, oy = offset
     pa = (a[0] + ox, a[1] + oy)
     pb = (b[0] + ox, b[1] + oy)
     c.line(*fr.p(*a), *fr.p(pa[0] + ox * 0.15, pa[1] + oy * 0.15))
     c.line(*fr.p(*b), *fr.p(pb[0] + ox * 0.15, pb[1] + oy * 0.15))
     c.line(*fr.p(*pa), *fr.p(*pb))
-    for q in (pa, pb):
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    n = math.hypot(dx, dy)
+    ux, uy = dx / n, dy / n
+    for q in (pa, pb):  # 45° ticks
         qx, qy = fr.p(*q)
-        c.line(qx - 1.2 * MM, qy - 1.2 * MM, qx + 1.2 * MM, qy + 1.2 * MM)
+        tx, ty = (ux - uy) / math.sqrt(2) * 1.7 * MM, (uy + ux) / math.sqrt(2) * 1.7 * MM
+        c.line(qx - tx, qy - ty, qx + tx, qy + ty)
+    angle = math.degrees(math.atan2(uy, ux))
+    if angle <= -90.0 or angle > 90.0:  # keep text readable
+        angle = (angle + 180.0) % 360.0
+        if angle > 180:
+            angle -= 360
+    rad = math.radians(angle)
     mx, my = fr.p((pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2)
-    vertical = abs(a[0] - b[0]) < 1e-9
-    angle = 90.0 if vertical else 0.0
+    tx, ty = mx - math.sin(rad) * 1.2 * MM, my + math.cos(rad) * 1.2 * MM
     text = fmt_m(value, style)
-    tx, ty = (mx - 1.2 * MM, my) if vertical else (mx, my + 1.2 * MM)
     box = sh.text(tx, ty, text, 6.5, angle=angle, anchor="center", role="dim")
     sh.gt.setdefault("dimensions", []).append(
-        {"text": text, "value_m": round(value, 3), "bbox": box, "angle_deg": angle}
+        {
+            "text": text,
+            "value_m": round(value, 3),
+            "bbox": box,
+            "angle_deg": round(angle % 360, 1),
+            "a_m": [round(pa[0], 4), round(pa[1], 4)],
+            "b_m": [round(pb[0], 4), round(pb[1], 4)],
+        }
     )
 
 
-def draw_dimensions(sh: Sheet, fr: PlanFrame, layout: Layout, style: str) -> None:
+def draw_dimensions(sh: Sheet, fr: PlanFrame, spec: PlanSpec, style: str) -> None:
+    """Exterior dimension chains along both lattice axes (room splits + overall length), on the
+    sides whose facade is straight. Values are lattice lengths, i.e. true lengths along e1/e2."""
+    layout = spec.layout
+    if layout is None:
+        return
     width, depth = layout.width, layout.depth
-    # chain along the bottom: splits of the rooms touching y = 0
+    arc_walls = {i for i, w in enumerate(spec.walls[:4]) if w.is_arc}
+    # e1 chain: bottom (wall 0) unless it is the arc, else top (wall 2); e2 chain: left (3) / right (1)
+    use_top = 0 in arc_walls
+    use_right = 3 in arc_walls
+    y_line = depth if use_top else 0.0
     xs = sorted(
         {0.0, width}
-        | {r.x0 for r in layout.rooms if r.y0 < 1e-6}
-        | {r.x1 for r in layout.rooms if r.y0 < 1e-6}
+        | {r.x0 for r in layout.rooms if abs((r.y1 if use_top else r.y0) - y_line) < 1e-6}
+        | {r.x1 for r in layout.rooms if abs((r.y1 if use_top else r.y0) - y_line) < 1e-6}
     )
-    # window tags sit ~0.75 m outside the facade, so dimension chains start at 1.4 m
-    for a, b in itertools.pairwise(xs):
-        _dim_line(sh, (a, -0.4), (b, -0.4), (0, -1.4), b - a, style, fr)
-    _dim_line(sh, (0.0, -0.4), (width, -0.4), (0, -2.1), width, style, fr)
+    n1 = (-spec.e1[1], spec.e1[0])  # left normal of e1 (towards the plan)
+    sgn = 1.0 if use_top else -1.0  # outward
+    for k, lst in ((1.4, list(itertools.pairwise(xs))), (2.1, [(0.0, width)])):
+        for a, b in lst:
+            pa, pb = spec.lattice(a, y_line), spec.lattice(b, y_line)
+            base_a = (pa[0] + n1[0] * sgn * 0.4, pa[1] + n1[1] * sgn * 0.4)
+            base_b = (pb[0] + n1[0] * sgn * 0.4, pb[1] + n1[1] * sgn * 0.4)
+            _dim_line(sh, base_a, base_b, (n1[0] * sgn * k, n1[1] * sgn * k), b - a, style, fr)
+    x_line = width if use_right else 0.0
     ys = sorted(
         {0.0, depth}
-        | {r.y0 for r in layout.rooms if r.x0 < 1e-6}
-        | {r.y1 for r in layout.rooms if r.x0 < 1e-6}
+        | {r.y0 for r in layout.rooms if abs((r.x1 if use_right else r.x0) - x_line) < 1e-6}
+        | {r.y1 for r in layout.rooms if abs((r.x1 if use_right else r.x0) - x_line) < 1e-6}
     )
-    for a, b in itertools.pairwise(ys):
-        _dim_line(sh, (-0.4, a), (-0.4, b), (-1.4, 0), b - a, style, fr)
-    _dim_line(sh, (-0.4, 0.0), (-0.4, depth), (-2.1, 0), depth, style, fr)
+    n2 = (-spec.e2[1], spec.e2[0])  # left normal of e2: away from the plan on the left side
+    sgn = -1.0 if use_right else 1.0
+    for k, lst in ((1.4, list(itertools.pairwise(ys))), (2.1, [(0.0, depth)])):
+        for a, b in lst:
+            pa, pb = spec.lattice(x_line, a), spec.lattice(x_line, b)
+            base_a = (pa[0] + n2[0] * sgn * 0.4, pa[1] + n2[1] * sgn * 0.4)
+            base_b = (pb[0] + n2[0] * sgn * 0.4, pb[1] + n2[1] * sgn * 0.4)
+            _dim_line(sh, base_a, base_b, (n2[0] * sgn * k, n2[1] * sgn * k), b - a, style, fr)
 
 
-def draw_fixtures(sh: Sheet, fr: PlanFrame, layout: Layout, rng: np.random.Generator) -> None:
+def draw_fixtures(sh: Sheet, fr: PlanFrame, spec: PlanSpec, rng: np.random.Generator) -> None:
     c = sh.c
     c.setLineWidth(0.3)
-    for r in layout.rooms:
+    if spec.layout is None:
+        return
+    for r in spec.layout.rooms:
         nx = max(1, int((r.x1 - r.x0) / 1.4))
         ny = max(1, int((r.y1 - r.y0) / 1.4))
         for i in range(nx):
             for j in range(ny):
                 x = r.x0 + (i + 0.5) * (r.x1 - r.x0) / nx
                 y = r.y0 + (j + 0.5) * (r.y1 - r.y0) / ny
-                px, py = fr.p(x, y)
+                px, py = fr.p(*spec.lattice(x, y))
                 rr = 1.4 * MM
                 c.circle(px, py, rr)
                 c.line(px - rr, py - rr, px + rr, py + rr)
                 c.line(px - rr, py + rr, px + rr, py - rr)
+
+
+def draw_islands(sh: Sheet, fr: PlanFrame, spec: PlanSpec, lang: str) -> None:
+    c = sh.c
+    c.setLineWidth(0.25)
+    for isl in spec.islands:
+        p = c.beginPath()
+        p.moveTo(*fr.p(*isl.polygon[0]))
+        for q in isl.polygon[1:]:
+            p.lineTo(*fr.p(*q))
+        p.close()
+        c.drawPath(p, stroke=1, fill=0)
+        cx = sum(q[0] for q in isl.polygon) / 4
+        cy = sum(q[1] for q in isl.polygon) / 4
+        x, y = fr.p(cx, cy)
+        sh.text(
+            x, y - 2, "ADA" if lang == "tr" else "ISLAND", 5.5, anchor="center", role="furniture"
+        )
+    for r in spec.rooms:
+        if r.double_height:
+            x, y = fr.p(*r.label)
+            label = "ÇİFT YÜKSEKLİK" if lang == "tr" else "DOUBLE HEIGHT"
+            sh.text(x, y - 19, label, 6, anchor="center", role="double_height")
+
+
+STAMP_TEXT = {"tr": ("ONAYLANDI", "UYGULAMAYA"), "en": ("APPROVED", "FOR CONSTRUCTION")}
+
+
+def draw_stamp(sh: Sheet, x: float, y: float, rng: np.random.Generator, lang: str) -> None:
+    """A red office stamp (often over the drawing in scans)."""
+    c = sh.c
+    c.saveState()
+    c.setStrokeColorRGB(0.75, 0.1, 0.12)
+    c.setFillColorRGB(0.75, 0.1, 0.12)
+    c.setStrokeAlpha(0.8)
+    c.setFillAlpha(0.8)
+    r = 15 * MM
+    angle = float(rng.uniform(-25, 25))
+    c.setLineWidth(1.4)
+    c.circle(x, y, r)
+    c.setLineWidth(0.6)
+    c.circle(x, y, r - 2 * MM)
+    top, bottom = STAMP_TEXT[lang]
+    sh.text(x, y + 1.5 * MM, top, 9, font="bold", angle=angle, anchor="center", role="stamp")
+    sh.text(x, y - 4 * MM, bottom, 5.5, angle=angle, anchor="center", role="stamp")
+    c.restoreState()
+    sh.gt["stamp"] = {"bbox": sh.bbox_px([(x - r, y - r), (x + r, y + r)])}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -567,9 +665,17 @@ def floor_plan_page(
     lang: str = "tr",
     ceiling: bool = False,
     room_numbers: bool = False,
+    spec: PlanSpec | None = None,
+    wall_style: str | None = None,
+    stamp: bool | None = None,
 ) -> Page:
-    layout = layout or random_layout(rng, english=lang == "en")
-    extent = (layout.width + 6.0, layout.depth + 6.0)
+    """Floor plan (or reflected ceiling plan) sheet of ``spec`` (default: ``layout`` drawn
+    orthogonally, or a random layout). Ground truth: words, tags, rooms, dimensions, scale, north
+    and ``plan_to_page_px`` (plan metres → page pixels at GT_DPI)."""
+    if spec is None:
+        spec = from_layout(layout or random_layout(rng, english=lang == "en"))
+    x0, y0, x1, y1 = spec.extent()
+    extent = (x1 - x0 + 6.0, y1 - y0 + 6.0)
     for size in ("A3", "A2", "A1"):
         fit = _fit_plan(SHEETS_MM[size], extent)
         if fit:
@@ -579,24 +685,33 @@ def floor_plan_page(
     sh, buf = _new(size)
     sh.frame()
     fr = PlanFrame(0, 0, scale)
-    fr.ox = (sh.w_mm / 2) * MM - fr.d(layout.width) / 2 - 10 * MM
-    fr.oy = (sh.h_mm / 2 + 20) * MM - fr.d(layout.depth) / 2
+    fr.ox = (sh.w_mm / 2) * MM - fr.d((x0 + x1) / 2) - 10 * MM
+    fr.oy = (sh.h_mm / 2 + 20) * MM - fr.d((y0 + y1) / 2)
     if ceiling:
-        draw_walls(sh, fr, layout, "outline")
-        draw_openings(sh, fr, layout, swings=False)
-        draw_fixtures(sh, fr, layout, rng)
-        draw_room_labels(sh, fr, layout, rng, lang, ceiling=True)
+        style = "outline"
+        draw_walls(sh, fr, spec, style)
+        draw_openings(sh, fr, spec, swings=False)
+        draw_fixtures(sh, fr, spec, rng)
+        draw_room_labels(sh, fr, spec, rng, lang, ceiling=True)
         title = "TAVAN PLANI" if lang == "tr" else "REFLECTED CEILING PLAN"
     else:
-        draw_walls(sh, fr, layout, str(rng.choice(["solid", "solid", "grey", "outline"])))
-        draw_openings(sh, fr, layout, swings=True)
-        draw_room_labels(sh, fr, layout, rng, lang, room_numbers=room_numbers)
-        draw_tags(sh, fr, layout, rng)
-        draw_dimensions(sh, fr, layout, "comma" if lang == "tr" else str(rng.choice(["dot", "cm"])))
+        style = wall_style or str(rng.choice(WALL_STYLES))
+        draw_walls(sh, fr, spec, style)
+        draw_openings(sh, fr, spec, swings=True)
+        draw_room_labels(sh, fr, spec, rng, lang, room_numbers=room_numbers)
+        draw_islands(sh, fr, spec, lang)
+        draw_tags(sh, fr, spec, rng)
+        draw_dimensions(sh, fr, spec, "comma" if lang == "tr" else str(rng.choice(["dot", "cm"])))
         title = "ZEMİN KAT PLANI" if lang == "tr" else "GROUND FLOOR PLAN"
     level = "Zemin Kat" if lang == "tr" else "Ground Floor"
+    # heading above the plan and any dimension chain on its top side (≤ 2.5 m outside the walls)
     sh.text(
-        fr.ox, fr.oy + fr.d(layout.depth) + 12 * MM, title, 14, font="bold", role="sheet_heading"
+        fr.ox + fr.d(x0),
+        fr.oy + fr.d(y1 + 2.6) + 4 * MM,
+        title,
+        14,
+        font="bold",
+        role="sheet_heading",
     )
     angle = float(rng.choice([0.0, 0.0, float(rng.uniform(-180, 180))]))
     north_arrow(sh, (sh.w_mm - 35) * MM, (sh.h_mm - 35) * MM, 9 * MM, angle, lang)
@@ -615,10 +730,15 @@ def floor_plan_page(
             level,
         ),
     )
+    if stamp if stamp is not None else (not ceiling and rng.random() < 0.3):
+        sx = fr.ox + fr.d(float(rng.uniform(x0, x1)))
+        sy = fr.oy + fr.d(float(rng.uniform(y0, y1)))
+        draw_stamp(sh, sx, sy, rng, lang)
     sh.gt["scale"] = scale
+    sh.gt["plan_to_page_px"] = fr.to_page_px(sh)
+    sh.gt["plan_variant"] = spec.variant
+    sh.gt["wall_style"] = style
     sh.gt["layout"] = {
-        "width": layout.width,
-        "depth": layout.depth,
         "openings": [
             {
                 "tag": o.tag,
@@ -627,7 +747,7 @@ def floor_plan_page(
                 "height_m": o.height,
                 "sill_m": o.sill,
             }
-            for o in layout.openings
+            for o in spec.openings
         ],
     }
     return _finish(sh, buf, "ceiling_plan" if ceiling else "floor_plan")

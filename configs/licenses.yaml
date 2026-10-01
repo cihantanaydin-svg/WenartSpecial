@@ -25,6 +25,7 @@ packages:
     manifold3d: {license: Apache-2.0, evidence: "https://github.com/elalish/manifold/blob/master/LICENSE", checked_at: 2026-09-30}
     scikit-image: {license: BSD-3-Clause, evidence: "https://github.com/scikit-image/scikit-image/blob/main/LICENSE.txt", checked_at: 2026-09-30}
     pypdfium2: {license: Apache-2.0 AND BSD-3-Clause, evidence: "https://github.com/pypdfium2-team/pypdfium2#licensing", note: "PyPI metadata: BSD-3-Clause, Apache-2.0, dependency licenses (PDFium BSD-3-Clause + permissive notices); both obligations kept", checked_at: 2026-09-30}
+    python-dateutil: {license: Apache-2.0 AND BSD-3-Clause, evidence: "https://github.com/dateutil/dateutil/blob/master/LICENSE", note: "PyPI metadata: 'Dual License'; contributions since 2017-12-01 Apache-2.0, earlier BSD-3-Clause; both notices kept (ifcopenshell dependency)", checked_at: 2026-10-01}
     # vLLM environment (deploy/vllm/requirements.lock): metadata missing for the pinned versions
     instanttensor: {license: Apache-2.0, evidence: "PyPI 0.2.0 license text (Apache License 2.0)", checked_at: 2026-09-30}
     humming-kernels: {license: Apache-2.0, evidence: "https://github.com/vllm-project/humming/blob/main/LICENSE", checked_at: 2026-09-30}

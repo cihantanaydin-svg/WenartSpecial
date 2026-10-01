@@ -1,9 +1,11 @@
 """Raster variants of synthetic sheets (scans) and procedural photos, with ground truth carried over.
 
 Scans: the vector page is rendered at the target DPI, then rotated slightly, blurred, noised,
-optionally converted to greyscale and JPEG-compressed. Word boxes are moved with the same affine
-transform, so the ground truth stays exact. Photos are procedural interior perspectives (not
-drawings), with camera EXIF like a phone picture.
+optionally converted to greyscale and JPEG-compressed. Word boxes and the plan→page transform are
+moved with the same affine transform, so the ground truth stays exact. Phone photos of a printed
+sheet: the page is warped by a random perspective onto a table background with uneven light,
+blur and JPEG, and the ground truth carries the homography. Photos are procedural interior
+perspectives (not drawings), with camera EXIF like a phone picture.
 """
 
 from __future__ import annotations
@@ -66,6 +68,9 @@ def transform_gt(gt: dict[str, Any], m: np.ndarray, dpi: float) -> dict[str, Any
     out["skew_deg"] = round(angle, 3)
     if "scale_bar" in out:
         out["scale_bar"]["segment_px"] *= s
+    if "plan_to_page_px" in gt:  # plan metres → pixels of this raster
+        a = np.vstack([np.array(gt["plan_to_page_px"], np.float64), [0, 0, 1]])
+        out["plan_to_page_px"] = (full @ a)[:2].tolist()
     return out
 
 
@@ -168,3 +173,95 @@ def photo(
     buf = io.BytesIO()
     pil.save(buf, "JPEG", quality=int(rng.integers(75, 95)), exif=exif)
     return buf.getvalue(), {"class": "photo", "words": [], "gt_dpi": None}
+
+
+PHONES = [("Apple", "iPhone 15"), ("samsung", "SM-S918B"), ("Xiaomi", "23078PND5G")]
+
+
+def phone_photo(
+    pdf: bytes,
+    gt: dict[str, Any],
+    rng: np.random.Generator,
+    *,
+    size: tuple[int, int] = (3264, 2448),
+    crop_corner: bool | None = None,
+) -> tuple[bytes, dict[str, Any]]:
+    """A phone picture of the printed sheet. Ground truth: ``sheet_corners_px`` (TL, TR, BR, BL of
+    the paper in the photo), ``page_to_photo_h`` (page px at GT_DPI → photo px) and, for plans,
+    ``plan_to_photo_h`` (plan metres → photo px). Word boxes are not carried over (OCR on photos
+    is measured after rectification)."""
+    w, h = size
+    page = np.asarray(render_pdf(pdf, 200.0), np.float32)
+    ph, pw = page.shape[:2]
+    # the sheet fills 70–90 % of the frame, seen from a slightly tilted, rotated camera
+    fill = float(rng.uniform(0.70, 0.90))
+    aspect = pw / ph
+    sw = min(w * fill, h * fill * aspect)
+    sh_ = sw / aspect
+    cx, cy = w / 2 + rng.uniform(-0.05, 0.05) * w, h / 2 + rng.uniform(-0.05, 0.05) * h
+    rot = math.radians(float(rng.uniform(-8, 8)))
+    base = np.array(
+        [[-sw / 2, -sh_ / 2], [sw / 2, -sh_ / 2], [sw / 2, sh_ / 2], [-sw / 2, sh_ / 2]]
+    )
+    keystone = rng.uniform(0.0, 0.10)  # far edge shorter: camera tilted towards the top
+    base[0, 0] *= 1 - keystone
+    base[1, 0] *= 1 - keystone
+    base += rng.normal(0, 0.012, base.shape) * np.array([sw, sh_])
+    rm = np.array([[math.cos(rot), -math.sin(rot)], [math.sin(rot), math.cos(rot)]])
+    corners = base @ rm.T + np.array([cx, cy])
+    src = np.array([[0, 0], [pw, 0], [pw, ph], [0, ph]], np.float32)
+    hmat = cv2.getPerspectiveTransform(src, corners.astype(np.float32))
+    # table: a warm, slightly textured surface
+    table = np.ones((h, w, 3), np.float32) * rng.uniform(90, 160, 3)
+    grain = cv2.GaussianBlur(rng.normal(0, 18, (h, w)).astype(np.float32), (0, 0), 25.0, sigmaY=2.0)
+    table += grain[..., None]
+    warped = cv2.warpPerspective(page, hmat, (w, h), flags=cv2.INTER_AREA, borderValue=(0, 0, 0))
+    mask = cv2.warpPerspective(np.ones((ph, pw), np.float32), hmat, (w, h), flags=cv2.INTER_LINEAR)
+    img: NDArray[np.float32] = np.asarray(
+        table * (1 - mask[..., None]) + warped * mask[..., None], np.float32
+    )
+    # uneven light: a broad gradient and a soft shadow
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    ang = rng.uniform(0, 2 * math.pi)
+    grad = 1.0 + 0.18 * ((xx / w - 0.5) * math.cos(ang) + (yy / h - 0.5) * math.sin(ang))
+    img *= grad[..., None]
+    sx, sy, sr = rng.uniform(0, w), rng.uniform(0, h), rng.uniform(0.2, 0.5) * w
+    shadow = 1.0 - 0.18 * np.exp(-(((xx - sx) ** 2 + (yy - sy) ** 2) / (2 * sr * sr)))
+    img *= shadow[..., None]
+    img *= np.array([1.0, rng.uniform(0.96, 1.0), rng.uniform(0.88, 0.97)], np.float32)  # warm cast
+    img = np.asarray(cv2.GaussianBlur(img, (0, 0), float(rng.uniform(0.6, 1.3))), np.float32)
+    img += rng.normal(0, 3.5, img.shape).astype(np.float32)
+    out = np.clip(img, 0, 255).astype(np.uint8)
+    full_h = np.asarray(hmat, np.float64) @ np.diag([200.0 / GT_DPI, 200.0 / GT_DPI, 1.0])
+    crop = crop_corner if crop_corner is not None else bool(rng.random() < 0.15)
+    if crop:  # one paper corner outside the frame
+        k = int(rng.integers(4))
+        dx = int(max(0.0, corners[k, 0] + 60)) if corners[k, 0] < w / 2 else 0
+        dy = int(max(0.0, corners[k, 1] + 60)) if corners[k, 1] < h / 2 else 0
+        x1 = w if corners[k, 0] < w / 2 else int(min(w, corners[k, 0] - 60))
+        y1 = h if corners[k, 1] < h / 2 else int(min(h, corners[k, 1] - 60))
+        out = np.ascontiguousarray(out[dy:y1, dx:x1])
+        shift = np.array([[1, 0, -dx], [0, 1, -dy], [0, 0, 1]], np.float64)
+        full_h = shift @ full_h
+        corners = corners - np.array([dx, dy])
+    maker, model = PHONES[int(rng.integers(len(PHONES)))]
+    exif = Image.Exif()
+    exif[0x010F] = maker
+    exif[0x0110] = model
+    buf = io.BytesIO()
+    Image.fromarray(out, "RGB").save(buf, "JPEG", quality=int(rng.integers(80, 93)), exif=exif)
+    pt = {
+        "class": gt.get("class"),
+        "source": "phone_photo",
+        "words": [],
+        "gt_dpi": None,
+        "sheet_corners_px": corners.round(2).tolist(),
+        "corners_in_frame": not crop,
+        "page_to_photo_h": full_h.tolist(),
+        "page_mm": gt.get("page_mm"),
+        "scale": gt.get("scale"),
+    }
+    if "plan_to_page_px" in gt:
+        a = np.vstack([np.array(gt["plan_to_page_px"], np.float64), [0, 0, 1]])
+        pt["plan_to_photo_h"] = (full_h @ a).tolist()
+    return buf.getvalue(), pt
