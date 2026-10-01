@@ -342,6 +342,10 @@ cascade with it.
   the others used; a project with no usable page fails with `PLAN_NO_PLAN_FOUND` and a fix hint.
 - Assumptions that need a person (level order, an RCP that does not register) are kept on the plan
   and shown as `PLAN_ASSUMPTION_REVIEW` warnings (validators recompute issues per version).
+- A page whose scale rests on one weak estimate (relative uncertainty > 2 %: door swings, a single
+  dimension string) gets a one-candidate scale conflict: blocking until the user confirms it or
+  calibrates (a calibration settles the page's scale questions). Found by the eval: a noisy scan
+  whose stated scale OCR missed was 4.3 % off with no warning.
 
 ## ADR-S24: The VLM assist as built (Phase 3; refines ADR-S19)
 **Decision.**

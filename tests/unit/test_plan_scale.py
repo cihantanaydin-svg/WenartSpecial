@@ -69,3 +69,15 @@ def test_dimension_ransac_picks_the_consistent_unit_reading() -> None:
     est = from_dimensions(pairs)
     assert est is not None and est.n == 3
     assert abs(est.value - 0.004) / 0.004 < 1e-6
+
+
+def test_a_single_weak_estimate_is_a_blocking_question_for_gate_a() -> None:
+    from archrender.plan.scale import ScaleEstimate, ScaleResult
+    from archrender.plan.stage import _scale_conflict
+
+    door = ScaleEstimate(0.0091, 0.12, "door_prior", 6, "median door swing")
+    [c] = _scale_conflict("pg1", ScaleResult(door, [door]))
+    assert c.key == "scale/pg1" and len(c.candidates) == 1 and c.severity == "error"
+    assert "weak" in c.rule
+    good = ScaleEstimate(0.0095, 0.0005, "stated", 1, "1:75 at 200 dpi")
+    assert _scale_conflict("pg1", ScaleResult(good, [good])) == []

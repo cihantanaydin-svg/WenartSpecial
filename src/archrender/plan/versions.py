@@ -851,6 +851,13 @@ def calibrate(
     note = f"scale calibrated by the user: {d:.3f} m measured is {length_m} m (×{k:.4f})"
     for t in scaled.doc_transforms:
         t.method = "user_calibration"
+    # the user's measurement settles any open scale question
+    scaled.conflicts = [
+        c.model_copy(update={"resolved_by": user_id, "resolution": c.proposed})
+        if c.key.startswith("scale/") and c.resolution is None
+        else c
+        for c in scaled.conflicts
+    ]
     scaled.assumptions = [x for x in scaled.assumptions if x.key != "user/scale_calibration"]
     from archrender.core.schemas.provenance import Assumption
 

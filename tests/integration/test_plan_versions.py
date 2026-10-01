@@ -338,6 +338,12 @@ def test_two_point_calibration_rescales_and_records_the_users_scale(
     assert p2.walls[0].centerline.length() == pytest.approx(length * 1.05)  # type: ignore[union-attr]
     assert "user/scale_calibration" in {x.key for x in p2.assumptions}
     assert all(t.method == "user_calibration" for t in p2.doc_transforms)
+    # a calibration also settles an open scale question of the page
+    vq = _with_scale_conflict(svc, project_id, v1, 1.0)
+    vc2 = versions.calibrate(svc, project_id, vq, a, b, length, user_id="usr_test")
+    pc = versions.load(svc, project_id, vc2)
+    assert pc.conflicts[0].resolved_by == "usr_test"
+    assert "PLAN_SCALE_CONFLICT" not in {i.code for i in pc.issues}
     for bad in ((a, a, 3.0), (a, b, length * 40)):
         with pytest.raises(ArchRenderError):
             versions.calibrate(svc, project_id, v1, bad[0], bad[1], bad[2], user_id="usr_test")

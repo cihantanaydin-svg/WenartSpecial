@@ -91,11 +91,16 @@ def _conflicts(plan: PlanGraph) -> list[ValidationIssue]:
             f"{x.get('method', '?')} {x.get('m_per_unit', x.get('value', ''))}"
             for x in c.candidates
         )
+        what = (
+            f"only one weak estimate ({cands}): {c.rule}"
+            if len(c.candidates) == 1
+            else f"sources disagree ({cands}); proposed candidate {c.proposed}"
+        )
         out.append(
             ValidationIssue(
                 code="PLAN_SCALE_CONFLICT" if scale else "PLAN_CONFLICT",
                 severity=c.severity,
-                message=f"{c.key}: sources disagree ({cands}); proposed candidate {c.proposed}.",
+                message=f"{c.key}: {what}.",
                 fix_hint="Choose the right value at Gate A"
                 + (" (or calibrate the scale with a known length)." if scale else "."),
                 element_ids=[],

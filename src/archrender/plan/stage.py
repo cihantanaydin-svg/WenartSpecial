@@ -134,9 +134,34 @@ def _scale_summary(res: ScaleResult, chosen: float) -> dict[str, Any]:
     }
 
 
+WEAK_SCALE = 0.02  # a scale known only to ± 2 % or worse needs a person (ADR-S23)
+
+
 def _scale_conflict(page_id: str, res: ScaleResult) -> list[Conflict]:
-    if not res.conflicted or res.estimate is None:
+    if res.estimate is None:
         return []
+    if not res.conflicted:
+        e = res.estimate
+        if e.rel_sigma <= WEAK_SCALE:
+            return []
+        # one weak estimate (door swings, a single dimension string): never silently trusted
+        return [
+            Conflict(
+                key=f"scale/{page_id}",
+                candidates=[
+                    {
+                        "method": e.method,
+                        "m_per_unit": e.value,
+                        "rel_sigma": e.rel_sigma,
+                        "detail": e.detail,
+                    }
+                ],
+                proposed=0,
+                rule=f"the scale rests on one weak estimate (± {e.rel_sigma:.0%}): confirm it, "
+                "or calibrate with a known length at Gate A",
+                severity=Severity.ERROR,
+            )
+        ]
     cands = [
         {"method": e.method, "m_per_unit": e.value, "rel_sigma": e.rel_sigma, "detail": e.detail}
         for e in res.estimates
@@ -687,7 +712,7 @@ def build_s2(svc: Services) -> StageDef[S2In, S2Out]:
 
     return StageDef(
         "S2_plan",
-        "4",
+        "5",
         S2Out,
         run,
         # a raster extracted without the VLM is recomputed once it serves (assist hints)
