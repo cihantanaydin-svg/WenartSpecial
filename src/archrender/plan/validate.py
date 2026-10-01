@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import itertools
 from collections import deque
+from typing import Any
 
 from shapely.geometry import LineString, Point, Polygon
 from shapely.geometry.base import BaseGeometry
@@ -33,7 +34,49 @@ def validate_plan(plan: PlanGraph) -> list[ValidationIssue]:
     issues += _openings(plan)
     issues += _reachability(plan)
     issues += _conflicts(plan)
+    issues += _assists(plan)
+    issues += _review(plan)
     return issues
+
+
+def _review(plan: PlanGraph) -> list[ValidationIssue]:
+    """Assumptions S2 made that a person should look at (not blocking)."""
+    return [
+        ValidationIssue(
+            code="PLAN_ASSUMPTION_REVIEW",
+            severity=Severity.WARNING,
+            message=f"{a.key}: {a.reason}",
+            fix_hint="Check it at Gate A and edit the plan if it is wrong.",
+        )
+        for a in plan.assumptions
+        if a.requires_review
+    ]
+
+
+def _assists(plan: PlanGraph) -> list[ValidationIssue]:
+    """Elements placed with VLM help wait for a person's confirmation at Gate A (ADR-S19)."""
+
+    def unconfirmed(f: Any) -> bool:
+        return any(
+            p.method == "vlm_assisted" and p.assist is not None and not p.assist.user_confirmed
+            for p in f.provenance
+        )
+
+    ids = [w.id for w in plan.walls if unconfirmed(w.thickness_m)]
+    ids += [o.id for o in plan.openings if unconfirmed(o.width_m)]
+    if not ids:
+        return []
+    return [
+        ValidationIssue(
+            code="PLAN_ASSIST_UNCONFIRMED",
+            severity=Severity.ERROR,
+            message=f"{len(ids)} element(s) were measured from VLM hints and are not confirmed yet: "
+            + ", ".join(ids[:10]),
+            fix_hint="Check each highlighted element against the drawing at Gate A, then confirm "
+            "it (or delete it).",
+            element_ids=ids,
+        )
+    ]
 
 
 def _conflicts(plan: PlanGraph) -> list[ValidationIssue]:

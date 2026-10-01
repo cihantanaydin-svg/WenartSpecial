@@ -230,13 +230,44 @@ class ArchRenderClient:
         return dict(self._post(f"/api/v1/projects/{project_id}/plans/extract"))
 
     def edit_plan(
-        self, project_id: str, version_id: str, ops: list[dict[str, Any]], note: str = ""
+        self,
+        project_id: str,
+        version_id: str,
+        ops: list[dict[str, Any]],
+        note: str = "",
+        rederive_rooms: bool = False,
     ) -> dict[str, Any]:
         """Apply an RFC 6902 JSON Patch; returns the new draft version (with its plan)."""
         return dict(
             self._post(
                 f"/api/v1/projects/{project_id}/plans/{version_id}/edits",
-                json={"ops": ops, "note": note},
+                json={"ops": ops, "note": note, "rederive_rooms": rederive_rooms},
+            )
+        )
+
+    def confirm_assists(
+        self, project_id: str, version_id: str, element_ids: list[str]
+    ) -> dict[str, Any]:
+        return dict(
+            self._post(
+                f"/api/v1/projects/{project_id}/plans/{version_id}/assists/confirm",
+                json={"element_ids": element_ids},
+            )
+        )
+
+    def decide_suggestion(
+        self,
+        project_id: str,
+        version_id: str,
+        suggestion_id: str,
+        accept: bool,
+        thickness_m: float | None = None,
+    ) -> dict[str, Any]:
+        """``suggestion_id`` as listed (``<page id>/sg<n>``)."""
+        return dict(
+            self._post(
+                f"/api/v1/projects/{project_id}/plans/{version_id}/suggestions/{suggestion_id}",
+                json={"action": "accept" if accept else "reject", "thickness_m": thickness_m},
             )
         )
 
@@ -247,6 +278,22 @@ class ArchRenderClient:
             self._post(
                 f"/api/v1/projects/{project_id}/plans/{version_id}/resolve",
                 json={"key": key, "choice": choice},
+            )
+        )
+
+    def calibrate_plan(
+        self,
+        project_id: str,
+        version_id: str,
+        a: tuple[float, float],
+        b: tuple[float, float],
+        length_m: float,
+    ) -> dict[str, Any]:
+        """The distance a–b (plan metres in this version) is really ``length_m``."""
+        return dict(
+            self._post(
+                f"/api/v1/projects/{project_id}/plans/{version_id}/calibrate",
+                json={"a": list(a), "b": list(b), "length_m": length_m},
             )
         )
 

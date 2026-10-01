@@ -79,3 +79,34 @@ export const PAGE_CLASSES = [
   "floor_plan", "ceiling_plan", "section", "elevation", "detail", "site_plan",
   "schedule", "text_document", "photo", "moodboard", "other",
 ] as const;
+
+// ---- plans (S2 / Gate A) ----------------------------------------------------------------------
+export interface Prov {
+  method: string; confidence: number; note?: string | null;
+  assist?: { trigger: string; evidence_coverage: number; snap_residual_px: number; accepted: boolean; user_confirmed: boolean } | null;
+}
+export interface Fact<T> { value: T; unit?: string | null; provenance: Prov[]; status: string }
+export interface Pt { x: number; y: number }
+export type Centerline =
+  | { kind: "segment"; a: Pt; b: Pt }
+  | { kind: "arc"; center: Pt; radius: number; start_deg: number; end_deg: number };
+export interface PlanWall { id: string; level: string; centerline: Centerline; thickness_m: Fact<number>; height_m: Fact<number>; kind: string }
+export interface PlanOpening {
+  id: string; host_wall: string; offset_m: Fact<number>; width_m: Fact<number>; height_m: Fact<number>; sill_m: Fact<number>;
+  type: string; hinge: string | null; swing_side: string | null;
+}
+export interface PlanRoom { id: string; level: string; polygon: Pt[]; holes: Pt[][]; name: Fact<string>; area_label_m2: Fact<number> | null }
+export interface Issue { code: string; severity: string; message: string; fix_hint: string; element_ids: string[]; location: Pt | null }
+export interface PlanConflict { key: string; candidates: Record<string, unknown>[]; proposed: number; rule: string; resolution: number | null }
+export interface Plan {
+  version: string; source: string; levels: { id: string; name: string; elevation_m: number }[];
+  walls: PlanWall[]; openings: PlanOpening[]; rooms: PlanRoom[]; issues: Issue[]; conflicts: PlanConflict[];
+}
+export interface Suggestion { id: string; page: string; kind: string; hint_plan: number[][]; reason: string; decision: string | null }
+export interface Background { page_id: string; image: CasRef; width_px: number; height_px: number; matrix: number[][] }
+export interface PlanVersionSummary {
+  id: string; number: number; parent_id: string | null; root_id: string; status: string; origin: string;
+  issues: Issue[]; blocking: number; created_at: string; approved_by: string | null;
+  extraction: { sources?: { page: string; source: string; level: string; notes: string[]; assist?: { triggers: { kind: string; detail: string }[]; source: string | null; accepted: number } | null }[] };
+}
+export interface PlanVersion extends PlanVersionSummary { plan: Plan; suggestions: Suggestion[]; backgrounds: Background[] }

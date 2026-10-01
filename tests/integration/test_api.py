@@ -282,6 +282,11 @@ def test_gate_a_plan_versions_through_the_api(app_env: tuple[TestClient, Service
     assert r.status_code == 404
     assert client.get(f"/api/v1/projects/{pid}/plans/bad.id", headers=h).status_code == 422
 
+    assert v2["suggestions"] == []
+    r = client.post(f"{url}/assists/confirm", json={"element_ids": ["W1"]}, headers=hdr["editor"])
+    assert r.status_code == 422 and "VLM help" in r.json()["error"]["message"]
+    r = client.post(f"{url}/suggestions/pg_x/sg1", json={"action": "reject"}, headers=hdr["editor"])
+    assert r.status_code == 404
     v2url = f"/api/v1/projects/{pid}/plans/{v2['id']}"
     assert client.post(f"{v2url}/approve", headers=hdr["viewer"]).status_code == 403
     r = client.post(f"{v2url}/approve", headers=hdr["reviewer"])

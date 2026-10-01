@@ -209,6 +209,9 @@ def cmd_plan(args: argparse.Namespace) -> int:
         )
         for i in v["issues"]:
             print(f"  [{i['severity']}] {i['code']}: {i['message']}")
+        for sg in v.get("suggestions", []):
+            state = sg["decision"] or "open"
+            print(f"  suggestion {sg['id']} ({state}): {sg['kind']} — {sg['reason']}")
         for k in plan["conflicts"]:
             state = "open" if k["resolution"] is None else f"resolved → {k['resolution']}"
             print(f"  conflict {k['key']} ({state}); proposed {k['proposed']}:")
@@ -220,7 +223,19 @@ def cmd_plan(args: argparse.Namespace) -> int:
             print("error: plan edit needs --patch FILE (RFC 6902 JSON Patch)", file=sys.stderr)
             return 2
         ops = json.loads(Path(args.patch).read_text(encoding="utf-8"))
-        v = c.edit_plan(args.project, args.version, ops, args.note or "")
+        v = c.edit_plan(args.project, args.version, ops, args.note or "", args.rooms)
+    elif args.action == "confirm":
+        if not args.elements:
+            print("error: plan confirm needs --elements ID[,ID…]", file=sys.stderr)
+            return 2
+        v = c.confirm_assists(args.project, args.version, args.elements.split(","))
+    elif args.action in ("accept", "reject"):
+        if not args.suggestion:
+            print(f"error: plan {args.action} needs --suggestion PAGE/sgN", file=sys.stderr)
+            return 2
+        v = c.decide_suggestion(
+            args.project, args.version, args.suggestion, args.action == "accept"
+        )
     elif args.action == "resolve":
         if args.key is None or args.choice is None:
             print("error: plan resolve needs --key and --choice", file=sys.stderr)
@@ -381,15 +396,33 @@ def build_parser() -> argparse.ArgumentParser:
     g.set_defaults(fn=cmd_gate)
 
     pl = sub.add_parser(
-        "plan", parents=[common], help="plan versions: list, show, edit, resolve, approve (Gate A)"
+        "plan",
+        parents=[common],
+        help="Gate A: list, show, edit, resolve conflicts, confirm assists, decide suggestions, approve",
     )
-    pl.add_argument("action", choices=["list", "show", "extract", "edit", "resolve", "approve"])
+    pl.add_argument(
+        "action",
+        choices=[
+            "list",
+            "show",
+            "extract",
+            "edit",
+            "resolve",
+            "confirm",
+            "accept",
+            "reject",
+            "approve",
+        ],
+    )
     pl.add_argument("project")
     pl.add_argument("version", nargs="?")
     pl.add_argument("--patch", help="edit: a JSON file with RFC 6902 operations")
     pl.add_argument("--note")
     pl.add_argument("--key", help="resolve: the conflict key, e.g. scale/pg_…")
     pl.add_argument("--choice", type=int, help="resolve: the candidate index")
+    pl.add_argument("--rooms", action="store_true", help="edit: re-derive rooms from the walls")
+    pl.add_argument("--elements", help="confirm: VLM-assisted element ids, comma-separated")
+    pl.add_argument("--suggestion", help="accept/reject: a suggestion id (PAGE/sgN)")
     pl.set_defaults(fn=cmd_plan)
 
     pg = sub.add_parser(

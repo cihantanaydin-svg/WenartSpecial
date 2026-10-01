@@ -794,6 +794,41 @@ def room_type(name: str) -> RoomType:
     return ROOM_TYPES.get(key, "other")
 
 
+def _text_lines(words: list[TextPrim]) -> list[list[TextPrim]]:
+    """Words → lines: same angle and baseline (in the text's own frame, so a slightly rotated
+    scan reads the same), joined left to right while the gaps are word gaps. DXF texts are whole
+    strings already."""
+    lines: list[list[TextPrim]] = [[t] for t in words if t.source == "dxf_text"]
+
+    def uv(t: TextPrim) -> tuple[float, float]:
+        a = math.radians(t.angle)
+        return t.x * math.cos(a) + t.y * math.sin(a), -t.x * math.sin(a) + t.y * math.cos(a)
+
+    rows: list[tuple[float, float, list[TextPrim]]] = []  # (angle, baseline v, words)
+    for t in sorted((t for t in words if t.source != "dxf_text"), key=lambda q: -uv(q)[1]):
+        v = uv(t)[1]
+        for angle, base, row in rows:
+            h = max(t.height, *(q.height for q in row), 1e-3)
+            if abs(angle - t.angle) <= 5 and abs(base - v) < 0.4 * h:
+                row.append(t)
+                break
+        else:
+            rows.append((t.angle, v, [t]))
+    for _, _, row in rows:
+        row.sort(key=lambda q: uv(q)[0])
+        line = [row[0]]
+        for t in row[1:]:
+            last = line[-1]
+            h = max(t.height, last.height, 1e-3)
+            if uv(t)[0] - uv(last)[0] < h * (len(last.text) * 0.75 + 1.5):
+                line.append(t)
+            else:
+                lines.append(line)
+                line = [t]
+        lines.append(line)
+    return lines
+
+
 def _labels(poly: Polygon, prims: Prims) -> tuple[str | None, str | None, float | None, list[str]]:
     """Name, number and area label of a room from the texts inside it.
 
@@ -815,22 +850,7 @@ def _labels(poly: Polygon, prims: Prims) -> tuple[str | None, str | None, float 
                 number = number or tag
             continue
         words.append(t)
-    lines: list[list[TextPrim]] = []
-    for t in sorted(words, key=lambda q: (q.source != "dxf_text", -q.y, q.x)):
-        if t.source == "dxf_text":
-            lines.append([t])
-            continue
-        for line in lines:
-            last = line[-1]
-            if last.source == "dxf_text" or abs(last.angle - t.angle) > 5:
-                continue
-            h = max(t.height, last.height, 1e-3)
-            gap = t.x - last.x
-            if abs(last.y - t.y) < 0.4 * h and 0 < gap < h * (len(last.text) * 0.75 + 1.5):
-                line.append(t)
-                break
-        else:
-            lines.append([t])
+    lines = _text_lines(words)
     names: list[tuple[float, str]] = []
     area = None
     for line in lines:

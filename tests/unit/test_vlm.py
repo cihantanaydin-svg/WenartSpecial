@@ -131,3 +131,51 @@ def test_supervisor_starts_vllm_only_when_weights_are_installed(tmp_path: Path) 
     )
     assert f"vllm serve {snap}" in text and "--port 8101" in text and "VLLM_SERVER_DEV_MODE" in text
     assert "--gpu-memory-utilization 0.5" in text
+
+
+def _answering(answer: dict[str, object], seen: dict[str, object]) -> VllmVlm:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            seen["body"] = json.loads(request.content)
+            return httpx.Response(
+                200, json={"choices": [{"message": {"content": json.dumps(answer)}}]}
+            )
+        return httpx.Response(404)
+
+    return VllmVlm(
+        _entry(), http=httpx.Client(base_url="http://vllm", transport=httpx.MockTransport(handler))
+    )
+
+
+def test_locate_elements_asks_for_points_on_the_full_resolution_tile() -> None:
+    import base64
+    import io
+
+    from PIL import Image
+
+    seen: dict[str, object] = {}
+    answer = {"elements": [{"kind": "wall", "points": [[10, 20], [300, 22]], "confidence": 0.8}]}
+    vlm = _answering(answer, seen)
+    tile = np.full((900, 1400, 3), 255, np.uint8)
+    out = vlm.locate_elements(tile, "Extraction problem here: ROOM_OPEN R2.")
+    assert out == answer
+    body = seen["body"]
+    assert isinstance(body, dict)
+    schema = body["response_format"]["json_schema"]["schema"]
+    item = schema["properties"]["elements"]["items"]
+    assert item["properties"]["kind"]["enum"] == ["wall", "door", "window", "opening"]
+    url = body["messages"][1]["content"][0]["image_url"]["url"]
+    sent = Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1])))
+    assert sent.size == (1400, 900)  # not downscaled
+    assert "1400×900" in body["messages"][1]["content"][1]["text"]
+    with pytest.raises(ArchRenderError):
+        vlm.locate_elements(np.zeros((1600, 200, 3), np.uint8), "too big")
+
+
+def test_points_outside_the_tile_are_refused() -> None:
+    vlm = _answering(
+        {"elements": [{"kind": "door", "points": [[10, 20], [5000, 22]], "confidence": 0.9}]}, {}
+    )
+    with pytest.raises(ArchRenderError) as e:
+        vlm.locate_elements(np.zeros((100, 100, 3), np.uint8), "q")
+    assert "outside" in e.value.message

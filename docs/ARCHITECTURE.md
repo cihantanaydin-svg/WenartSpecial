@@ -415,6 +415,15 @@ suggestions (accept / edit / reject).
 The issue list is clickable (zooms to location). Approve → immutable `PlanVersion`. Corrections are
 saved as training examples.
 
+*As built (Phase 3, ADR-S22):* every extraction and every saved edit is a version (draft →
+approved → superseded); edits are RFC 6902 patches with `user` provenance on what changed; a run
+renders the approved version of the current extraction (else its latest edit) and pins it; approval
+is refused while blocking issues remain (including unconfirmed `vlm_assisted` elements). The editor
+draws the plan over its source page, edits walls (drag ends with snapping, add, delete, thickness),
+openings (type, width, offset), rooms (name), re-derives rooms after wall edits, calibrates the
+scale from two points, resolves conflicts, confirms assisted elements and decides suggestions.
+API: `/api/v1/projects/{id}/plans…`; CLI: `archrender plan …`.
+
 ### S4 Design brief (`brief/`)
 - **Sources**: text briefs (Docling-parsed), schedules (authoritative for finishes), mood boards,
   references, and furniture photos.

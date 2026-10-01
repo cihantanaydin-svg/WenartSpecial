@@ -301,6 +301,105 @@ with a hint to save plain files. openpyxl uses defusedxml (XML bomb protection).
 dependency set (it can return for PDF layout if PP-DocLayoutV3 disappoints; it would then be an
 explicit ADR change).
 
+## ADR-S22: Plan versions, Gate A and the plan a run renders (Phase 3)
+**Context.** Gate A must let a person correct the extracted plan without losing what was extracted,
+runs are re-entrant (a parked run restarts from the top), and the owner wants corrections kept
+(but not used for training without their consent, answer Q-4).
+**Decision.**
+- S2 stores each new extraction as a **draft plan version** (content-hashed: unchanged pages reuse
+  their version). Every edit is an RFC 6902 JSON Patch that makes a new draft; edited facts get
+  `user` provenance. Versions never change; only their status moves (draft → approved →
+  superseded).
+- Approval is refused while the plan has blocking issues (errors: open rooms, unresolved scale
+  conflicts, unconfirmed VLM-assisted elements …). Approving makes the previous approval superseded
+  and stores the corrections since the extraction as a `training_examples` row with
+  `training_use_allowed = 0`.
+- **The approved version wins**: a run uses the approved version of the current extraction if
+  there is one (later drafts take effect once approved), otherwise its latest edit. A run **pins**
+  the version it starts with (`runs.plan_version`), so a resumed run never picks up a plan approved
+  in the meantime; approving Gate A approves a version (the one named, else the latest edit of the
+  parked one) and re-pins the run to it. A later run with an approved version records Gate A as
+  approved ("approved before this run") instead of asking again.
+- Resolving a conflict is an edit: a scale choice rescales the page's level (lengths, not heights or
+  stated area labels); a schedule/drawing width choice sets the opening's width. Two-point
+  calibration (a known length) rescales the plan with the user's measurement as provenance.
+**Consequences.** Every coordinate a run renders is traceable to an extraction plus named edits.
+Edits after approval need a new approval; the editor shows this. Plan rows are per project and
+cascade with it.
+
+## ADR-S23: S2 sources, levels and the PLAN job (Phase 3)
+**Decision.**
+- Plan pages are those S1 labels `floor_plan` (or the user relabels), plus IFC models. Per level,
+  precedence IFC > DXF > vector PDF > raster; raster pages are not extracted at all when a vector or
+  model source exists (scans of sheets we also have as vectors). A PDF page counts as vector when it
+  has ≥ 30 drawn paths and images cover < 50 % of it.
+- Several 2D sources become levels in storey order parsed from their names (Turkish and English:
+  bodrum/basement < zemin/ground < asma/mezzanine < "1. Kat"/"First Floor"/"Level 1" < çatı/roof),
+  elevation = rank × a default 3.0 m storey height (an assumption). Names that say nothing go above
+  the others in sheet order, flagged for review.
+- A PLAN job follows S1 whenever the project has a plan source; a run that starts before S1 has
+  finished runs S1 first (cached pages are hits). Extraction failures of one page are recorded and
+  the others used; a project with no usable page fails with `PLAN_NO_PLAN_FOUND` and a fix hint.
+- Assumptions that need a person (level order, an RCP that does not register) are kept on the plan
+  and shown as `PLAN_ASSUMPTION_REVIEW` warnings (validators recompute issues per version).
+
+## ADR-S24: The VLM assist as built (Phase 3; refines ADR-S19)
+**Decision.**
+- Scope: raster pages (scans, rectified photos), where the CV baseline misses things. Vector and
+  model sources are exact; their problems are drawing errors for Gate A.
+- Triggers (`plan/assist.py`): validator failures (open room, area-label mismatch → ask for walls;
+  unreachable room → ask for openings), wall body joined to the walls that no extracted wall
+  explains, walls with confidence < 0.5. Overlapping windows are merged; ≤ 20 calls per sheet; a
+  failed call is logged and the extraction continues.
+- Snapping: a wall is measured from cross-sections of the wall body (or two face strokes) along
+  the hint, robust line fit (junction/crossing outliers rejected), thickness from the median width.
+  New walls need evidence over ≥ 80 % of the hinted span and a fit residual ≤ 1.5 strokes. A hint
+  along a wall already in the plan counts only where it **extends** it: over continuous wall body
+  (a junction lost where a stamp touches the wall), or across a gap with a door/window symbol to the
+  next wall (a short piece beside a door was lost). Openings are measured as the gap in the host's
+  body with jambs on both faces; the symbol in the gap (swing arc about either jamb, glazing lines)
+  decides the type.
+- Accepted walls are added as filled rectangles of their drawn pieces to the primitives and the plan
+  is rebuilt, so junctions, rooms and the openings in them come from the normal builder; walls that
+  are new or changed get `vlm_assisted` provenance (confidence 0.6, with the hint, coverage and
+  residual). Accepted openings are hosted directly. `PLAN_ASSIST_UNCONFIRMED` (error) blocks
+  approval and auto-pass until a person confirms them. Unsnapped hints are stored as suggestions;
+  accepting one inserts the user's own element (rooms re-derived), rejecting it is recorded; both
+  decisions are training examples (`assist_decision`, not for training without the owner).
+- The stage cache key includes whether the VLM serves, so a page extracted without it is redone
+  once it does.
+**Measured** (`make eval`, ground-truth hints standing in for the VLM; property test with
+adversarial hints): see PROGRESS.md. The VLM's own pointing accuracy is UNVERIFIED-ON-GPU.
+
+## ADR-S25: Annotations from the other sheets: RCP heights and schedules (Phase 3)
+**Decision.**
+- The reflected ceiling plan is extracted like a floor plan and registered onto its level's plan:
+  similarity transform by ICP on wall centre-line samples (target sampled every 1 cm so the residual
+  is a distance to the lines), started from 0/90/180/270° and from the dominant-direction offset.
+  It is used only if ≥ 70 % of its walls match with RMS ≤ 20 mm; otherwise the heights are not used
+  and the user is told. Height labels ("+2,70", "h=2.80", "TH 3.00"; a bare number is not one) set
+  the room's ceiling height (`pdf_text`/`ocr` provenance); ≥ 1.6 × storey → double height; walls
+  reach the highest ceiling of the rooms they bound.
+- Door/window tags are read from the extraction's own texts (DXF, PDF and OCR alike) and given to
+  the nearest compatible opening (≤ 1.5 m, nearest pairs first). A schedule row for the tag supplies
+  height and sill (replacing defaults). Its width is the specification: when it differs from the
+  drawn width by > 3 cm, the schedule width is used and the disagreement is a Gate A conflict
+  (warning, resolvable either way).
+
+## ADR-S26: Plan segmentation v1 (Phase 3; amends ADR-M06)
+**Context.** ADR-M06 named segmentation-models-pytorch with a DINOv2/ConvNeXt encoder. The training
+data are synthetic only (owner answer Q-4) and no GPU is available in the build environment.
+**Decision.** v1 is a small U-Net in plain PyTorch (`plan/seg_train.py`; no new dependency), trained
+on tiles of scanned synthetic sheets labelled from the exact ground truth (`plan/seg_data.py`:
+background, wall, door, window, room). The `raster_seg` hook is built: a predicted wall mask
+replaces the vectoriser's morphological wall body; everything downstream is unchanged. The
+`plan_segmenter` role (TorchScript impl) is mapped in no profile until a checkpoint passes the
+promotion rule (beats the CV baseline on held-out sheets and meets the clean-raster targets).
+**Measured ceiling.** With the ground-truth wall mask, noisy 300-DPI scans that the CV body gets
+wrong (stamps, hatch, outline walls) extract with walls 1.00, rooms 1.00, openings 0.90–1.00.
+**Consequences.** A stronger encoder can replace the U-Net later behind the same hook; the
+training run on the pod is UNVERIFIED-ON-GPU.
+
 ## Phase-2 amendments to earlier ADRs
 - **ADR-M03 (OCR): Tesseract 5 replaces RapidOCR as the CPU fallback.** RapidOCR's ONNX models are
   hosted on ModelScope/Hugging Face, which this build environment cannot reach, so it could not be
@@ -341,3 +440,13 @@ explicit ADR change).
 - **Readiness and fallbacks:** roles whose model (and fallbacks) have no runtime in the current
   build run on their mock with a recorded degradation; `/readyz` lists them as degraded instead of
   blocking. Readiness only considers the roles the implemented stages call.
+
+## Phase-3 amendments to earlier ADRs
+- **ADR-S04 (scene geometry): wall footprints may have several parts, and junctions go to the main
+  walls.** Extracted plans have T and X junctions in any wall order; the Phase-1 partition (first
+  wall owns the junction; a split footprint was an error) rejected them. Walls now own their
+  footprint in priority order (exterior, thicker, longer), and a wall crossed by another keeps
+  every part. Extracted plans of all variants compile watertight.
+- **Room labels on rotated scans.** Words are joined into lines in the text's own frame (baseline
+  clusters, then left to right), and a word's letter height comes from its box and angle; a 1°
+  scan rotation had turned every word "vertical" (height = box width) and split "Yatak Odası".

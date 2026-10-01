@@ -114,6 +114,7 @@ export function ProjectPage({ projectId }: { projectId: string }) {
         </div>
       </div>
       <Pages projectId={projectId} refresh={refresh} />
+      <p><a className="button secondary" href={`#/projects/${projectId}/plan`} data-testid="open-plan">Plan (Gate A) →</a></p>
       <h2>Runs</h2>
       <ul className="list">
         {runs.map((r) => (

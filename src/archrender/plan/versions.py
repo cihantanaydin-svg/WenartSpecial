@@ -318,7 +318,10 @@ def edit(
     *,
     user_id: str,
     note: str = "",
+    rederive_rooms: bool = False,
 ) -> str:
+    """``rederive_rooms``: recompute the rooms from the edited walls (after moving, adding or
+    deleting walls); rooms keep their names and labels where they overlap the old ones."""
     base_row = get_row(svc, project_id, version_id)
     base = load(svc, project_id, version_id)
     old = base.model_dump(mode="json")
@@ -336,6 +339,10 @@ def edit(
             "Undo the last change; every opening needs an existing host wall, every room ≥ 3 points.",
         ) from e
     plan.source = base.source if base.source != "mock" else "user"
+    if rederive_rooms:
+        from archrender.plan.rooms import rederive_rooms as derive
+
+        plan = derive(plan)
     vid, _ = _insert(
         svc,
         project_id,
@@ -401,6 +408,12 @@ def rescale(
     return PlanGraph.model_validate(d)
 
 
+def _fact_from(value: float, note: str) -> Any:
+    from archrender.core.schemas.provenance import Fact
+
+    return Fact.model_validate(_user_fact(value, None, note))
+
+
 def resolve_conflict(
     svc: Services, project_id: str, version_id: str, key: str, choice: int, *, user_id: str
 ) -> str:
@@ -435,6 +448,15 @@ def resolve_conflict(
                     "Re-extract the plan, then resolve the scale again.",
                 )
             plan = rescale(plan, chosen / used, level=level, page_id=page_id)
+    elif key.startswith("opening/") and key.endswith("/width"):
+        oid = key.split("/")[1]
+        o = next((x for x in plan.openings if x.id == oid), None)
+        if o is None:
+            raise not_found("Opening", oid)
+        cand = c.candidates[choice]
+        o.width_m = _fact_from(
+            float(cand["value"]), f"Gate A: {cand.get('method', '?')} width chosen ({key})"
+        )
     plan.conflicts[idx] = c.model_copy(update={"resolved_by": user_id, "resolution": choice})
     vid, _ = _insert(
         svc,
@@ -565,3 +587,312 @@ def training_examples(svc: Services, project_id: str) -> list[dict[str, Any]]:
         }
         for r in rows
     ]
+
+
+# ---------------------------------------------------------------------------------------------
+# VLM assist at Gate A: confirmations and suggestion decisions (ADR-S19)
+# ---------------------------------------------------------------------------------------------
+def _derived_version(
+    svc: Services,
+    project_id: str,
+    version_id: str,
+    plan: PlanGraph,
+    patch: list[dict[str, Any]],
+    note: str,
+    user_id: str,
+) -> str:
+    base_row = get_row(svc, project_id, version_id)
+    vid, _ = _insert(
+        svc,
+        project_id,
+        plan,
+        origin="edit",
+        parent=version_id,
+        root=base_row["root_id"],
+        extraction=json.loads(base_row["extraction_json"]),
+        user_id=user_id,
+    )
+    svc.db.execute(
+        "INSERT INTO plan_edits(id, project_id, from_version, to_version, patch_json, summary, created_by,"
+        " created_at) VALUES (?,?,?,?,?,?,?,?)",
+        (new_id("ple"), project_id, version_id, vid, json.dumps(patch), note, user_id, now_iso()),
+    )
+    return vid
+
+
+def _assist_example(
+    svc: Services, project_id: str, version_id: str, page: str | None, payload: dict[str, Any]
+) -> None:
+    svc.db.execute(
+        "INSERT INTO training_examples(id, project_id, kind, source_page, plan_version, payload_json,"
+        " training_use_allowed, created_at) VALUES (?,?,?,?,?,?,?,?)",
+        (
+            new_id("trx"),
+            project_id,
+            "assist_decision",
+            page,
+            version_id,
+            json.dumps(payload),
+            0,
+            now_iso(),
+        ),
+    )
+
+
+def suggestions(svc: Services, project_id: str, version_id: str) -> list[dict[str, Any]]:
+    """The VLM hints of this version's extraction that had no evidence (shown dashed at Gate A),
+    with the decision taken on each so far (``None`` while open)."""
+    row = get_row(svc, project_id, version_id)
+    extraction = json.loads(row["extraction_json"])
+    decided: dict[str, str] = {}
+    for r in svc.db.query(
+        "SELECT payload_json FROM training_examples WHERE project_id = ? AND kind = 'assist_decision'",
+        (project_id,),
+    ):
+        p = json.loads(r["payload_json"])
+        if p.get("root") == row["root_id"] and "suggestion" in p:
+            decided[p["suggestion"]] = p["action"]
+    return [
+        {**sg, "decision": decided.get(sg["id"])}
+        for src in extraction.get("sources", [])
+        for sg in ((src.get("assist") or {}).get("suggestions") or [])
+    ]
+
+
+def confirm_assists(
+    svc: Services, project_id: str, version_id: str, element_ids: list[str], *, user_id: str
+) -> str:
+    """A new version in which a person confirmed elements measured from VLM hints."""
+    row = get_row(svc, project_id, version_id)
+    d = load(svc, project_id, version_id).model_dump(mode="json")
+    found: set[str] = set()
+    for el, keys in [(w, ("thickness_m",)) for w in d["walls"]] + [
+        (o, ("offset_m", "width_m")) for o in d["openings"]
+    ]:
+        if el["id"] not in element_ids:
+            continue
+        for k in keys:
+            for prov in el[k]["provenance"]:
+                if prov["method"] == "vlm_assisted" and prov.get("assist"):
+                    prov["assist"]["user_confirmed"] = True
+                    found.add(el["id"])
+    missing = sorted(set(element_ids) - found)
+    if missing:
+        raise ArchRenderError(
+            ErrorCode.VALIDATION,
+            f"Not elements placed with VLM help in this version: {', '.join(missing)}.",
+            "Confirm only the highlighted (vlm_assisted) elements.",
+        )
+    vid = _derived_version(
+        svc,
+        project_id,
+        version_id,
+        PlanGraph.model_validate(d),
+        [{"op": "confirm_assist", "ids": sorted(found)}],
+        f"confirmed {len(found)} VLM-assisted element(s)",
+        user_id,
+    )
+    _assist_example(
+        svc,
+        project_id,
+        vid,
+        None,
+        {"root": row["root_id"], "action": "confirmed", "elements": sorted(found)},
+    )
+    return vid
+
+
+def decide_suggestion(
+    svc: Services,
+    project_id: str,
+    version_id: str,
+    suggestion_id: str,
+    *,
+    accept: bool,
+    user_id: str,
+    thickness_m: float | None = None,
+) -> str | None:
+    """Accept (insert as the user's own element; rooms re-derived) or reject a suggestion.
+    Returns the new version id on accept, None on reject."""
+    import numpy as np
+
+    from archrender.core.schemas.common import Point2
+    from archrender.core.schemas.plan import Opening, Segment, Wall
+    from archrender.core.schemas.provenance import fact
+    from archrender.plan.assist import _host
+    from archrender.plan.rooms import rederive_rooms
+
+    row = get_row(svc, project_id, version_id)
+    sg = next(
+        (s for s in suggestions(svc, project_id, version_id) if s["id"] == suggestion_id), None
+    )
+    if sg is None:
+        raise not_found("Suggestion", suggestion_id)
+    if sg["decision"] is not None:
+        raise ArchRenderError(
+            ErrorCode.CONFLICT,
+            f"Suggestion {suggestion_id} was already {sg['decision']}.",
+            "Refresh the plan.",
+        )
+    payload = {"root": row["root_id"], "suggestion": suggestion_id, "hint": sg}
+    if not accept:
+        _assist_example(svc, project_id, version_id, sg["page"], {**payload, "action": "rejected"})
+        return None
+    plan = load(svc, project_id, version_id)
+    t = next((t for t in plan.doc_transforms if f"{t.doc_id}_p{t.page}" == sg["page"]), None)
+    if t is None:
+        raise ArchRenderError(
+            ErrorCode.CONFLICT,
+            f"Page {sg['page']} is not a source of this plan version.",
+            "Re-extract the plan.",
+        )
+    m = np.array(t.matrix, float)
+    a, b = np.array(sg["hint_px"], float) @ m[:, :2].T + m[:, 2]  # the version's current frame
+    page_level = next(
+        (
+            s["level"]
+            for s in json.loads(row["extraction_json"])["sources"]
+            if s["page"] == sg["page"]
+        ),
+        None,
+    )
+    level = next((lv.id for lv in plan.levels if lv.name == page_level), plan.levels[0].id)
+    note = f"accepted VLM suggestion {suggestion_id} (no drawing evidence found)"
+    d = plan.model_copy(deep=True)
+    if sg["kind"] == "wall":
+        inner = [w.thickness_m.value for w in plan.walls if w.kind != "exterior"]
+        tk = thickness_m or (float(np.median(inner)) if inner else 0.12)
+        heights = [w.height_m.value for w in plan.walls]
+        d.walls.append(
+            Wall(
+                id=f"WU{len(plan.walls) + 1}",
+                level=level,
+                centerline=Segment(
+                    a=Point2(x=float(a[0]), y=float(a[1])), b=Point2(x=float(b[0]), y=float(b[1]))
+                ),
+                thickness_m=fact(tk, "user", 1.0, note=note),
+                height_m=fact(float(np.median(heights)) if heights else 2.7, "default", 0.5),
+                kind="interior",
+            )
+        )
+        d = rederive_rooms(PlanGraph.model_validate(d.model_dump()))
+    else:
+        span = float(np.hypot(*(b - a)))
+        host = _host(plan, (a + b) / 2, (b - a) / span if span > 0.2 else None)
+        if host is None or not isinstance(host.centerline, Segment):
+            raise ArchRenderError(
+                ErrorCode.VALIDATION,
+                "No straight wall near the suggested opening.",
+                "Draw the opening in the editor instead.",
+            )
+        h0 = np.array([host.centerline.a.x, host.centerline.a.y])
+        h1 = np.array([host.centerline.b.x, host.centerline.b.y])
+        u = (h1 - h0) / float(np.hypot(*(h1 - h0)))
+        s0, s1 = sorted((float(np.dot(a - h0, u)), float(np.dot(b - h0, u))))
+        door = sg["kind"] != "window"
+        d.openings.append(
+            Opening(
+                id=f"OU{len(plan.openings) + 1}",
+                host_wall=host.id,
+                offset_m=fact((s0 + s1) / 2, "user", 1.0, note=note),
+                width_m=fact(s1 - s0, "user", 1.0, note=note),
+                height_m=fact(2.1 if door else 1.2, "default", 0.5),
+                sill_m=fact(0.0 if door else 0.9, "default", 0.5),
+                type=sg["kind"],
+            )
+        )
+    vid = _derived_version(
+        svc,
+        project_id,
+        version_id,
+        PlanGraph.model_validate(d.model_dump()),
+        [{"op": "accept_suggestion", "id": suggestion_id}],
+        note,
+        user_id,
+    )
+    _assist_example(svc, project_id, vid, sg["page"], {**payload, "action": "accepted"})
+    return vid
+
+
+def calibrate(
+    svc: Services,
+    project_id: str,
+    version_id: str,
+    a: tuple[float, float],
+    b: tuple[float, float],
+    length_m: float,
+    *,
+    user_id: str,
+    level: str | None = None,
+) -> str:
+    """Gate A scale calibration: the distance a–b (plan metres in this version) is really
+    ``length_m``. The plan (or ``level``) is rescaled about the origin; the user's measurement
+    becomes the scale's provenance."""
+    import math
+
+    plan = load(svc, project_id, version_id)
+    d = math.hypot(b[0] - a[0], b[1] - a[1])
+    if d < 0.05 or not 0.05 <= length_m <= 500:
+        raise ArchRenderError(
+            ErrorCode.VALIDATION,
+            f"Calibration needs two distinct points and a real length (got {d:.3f} m → {length_m} m).",
+            "Click two points on a known dimension and type its length in metres.",
+        )
+    k = length_m / d
+    if not 0.2 <= k <= 5:
+        raise ArchRenderError(
+            ErrorCode.VALIDATION,
+            f"The calibration would rescale the plan by ×{k:.3f}.",
+            "Check the clicked points and the typed length (metres, not centimetres).",
+        )
+    if level is not None and level not in {lv.id for lv in plan.levels}:
+        raise not_found("Level", level)
+    scaled = rescale(plan, k, level=level if len(plan.levels) > 1 else None)
+    note = f"scale calibrated by the user: {d:.3f} m measured is {length_m} m (×{k:.4f})"
+    for t in scaled.doc_transforms:
+        t.method = "user_calibration"
+    scaled.assumptions = [x for x in scaled.assumptions if x.key != "user/scale_calibration"]
+    from archrender.core.schemas.provenance import Assumption
+
+    scaled.assumptions.append(
+        Assumption(key="user/scale_calibration", value=k, reason=note, stage="S3", overridable=True)
+    )
+    return _derived_version(
+        svc,
+        project_id,
+        version_id,
+        scaled,
+        [{"op": "calibrate", "a": list(a), "b": list(b), "length_m": length_m}],
+        note,
+        user_id,
+    )
+
+
+def backgrounds(svc: Services, project_id: str, plan: PlanGraph) -> list[dict[str, Any]]:
+    """The source pages under the plan in the editor: image, size and page px → plan matrix
+    (raster and PDF pages; a phone photo shows its rectified sheet). DXF/IFC have none."""
+    from archrender.ingest.intake import page_refs
+
+    pages = {p.id: p for p in page_refs(svc, project_id)}
+    out = []
+    for t in plan.doc_transforms:
+        page = pages.get(f"{t.doc_id}_p{t.page}")
+        if page is None or page.kind in ("dxf", "ifc") or page.raster is None:
+            continue
+        image, w, h = page.raster, page.width_px, page.height_px
+        row = svc.db.one("SELECT analysis_json FROM page_analysis WHERE page_id = ?", (page.id,))
+        if row is not None:
+            a = json.loads(row["analysis_json"])
+            if a.get("rectified") and a.get("rectification"):
+                image = CasRef.model_validate(a["rectified"])
+                w, h = a["rectification"]["width_px"], a["rectification"]["height_px"]
+        out.append(
+            {
+                "page_id": page.id,
+                "image": image.model_dump(mode="json"),
+                "width_px": w,
+                "height_px": h,
+                "matrix": [list(r) for r in t.matrix],
+            }
+        )
+    return out

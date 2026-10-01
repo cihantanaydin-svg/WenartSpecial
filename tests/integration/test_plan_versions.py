@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 import pytest
@@ -320,3 +321,49 @@ def test_a_scan_of_a_sheet_that_is_also_a_dxf_is_not_extracted(
     assert [s["source"] for s in ex["sources"]] == ["dxf"]
     assert len(ex["skipped_rasters"]) == 1 and ex["failed"] == []
     assert cur.plan.source == "dxf"
+
+
+def test_two_point_calibration_rescales_and_records_the_users_scale(
+    svc: Services, project_id: str
+) -> None:
+    upload_bytes(svc, project_id, "Kat Planı.dxf", plan_dxf())
+    v1 = _extracted(svc, project_id)
+    plan = versions.load(svc, project_id, v1)
+    w = plan.walls[0]
+    a = (w.centerline.a.x, w.centerline.a.y)  # type: ignore[union-attr]
+    b = (w.centerline.b.x, w.centerline.b.y)  # type: ignore[union-attr]
+    length = math.hypot(b[0] - a[0], b[1] - a[1])
+    v2 = versions.calibrate(svc, project_id, v1, a, b, length * 1.05, user_id="usr_test")
+    p2 = versions.load(svc, project_id, v2)
+    assert p2.walls[0].centerline.length() == pytest.approx(length * 1.05)  # type: ignore[union-attr]
+    assert "user/scale_calibration" in {x.key for x in p2.assumptions}
+    assert all(t.method == "user_calibration" for t in p2.doc_transforms)
+    for bad in ((a, a, 3.0), (a, b, length * 40)):
+        with pytest.raises(ArchRenderError):
+            versions.calibrate(svc, project_id, v1, bad[0], bad[1], bad[2], user_id="usr_test")
+
+
+def test_choosing_the_drawn_width_over_the_schedule(svc: Services, project_id: str) -> None:
+    from archrender.plan.annotate import apply_schedules
+
+    upload_bytes(svc, project_id, "Kat Planı.dxf", plan_dxf())
+    v1 = _extracted(svc, project_id)
+    plan = versions.load(svc, project_id, v1)
+    o = plan.openings[0]
+    plan.openings[0].tag = "K9"
+    sched = {
+        "kind": "door_window",
+        "source_page": "pg",
+        "rows": [{"id": "r", "tag": "K9", "fields": {"width": o.width_m.value + 0.25}}],
+    }
+    with_sched, _ = apply_schedules(plan, [sched])
+    row = versions.get_row(svc, project_id, v1)
+    vc = versions.record_extraction(svc, project_id, with_sched, json.loads(row["extraction_json"]))
+    pc = versions.load(svc, project_id, vc)
+    assert pc.openings[0].width_m.value == pytest.approx(o.width_m.value + 0.25)
+    key = f"opening/{o.id}/width"
+    vr = versions.resolve_conflict(svc, project_id, vc, key, 0, user_id="usr_test")
+    pr = versions.load(svc, project_id, vr)
+    assert pr.openings[0].width_m.value == pytest.approx(o.width_m.value, abs=1e-4)
+    assert pr.openings[0].width_m.provenance[0].method == "user"
+    assert pr.conflicts[0].resolution == 0

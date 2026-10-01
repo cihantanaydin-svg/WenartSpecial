@@ -10,8 +10,9 @@
 Phase 0 approved 2026-09-30 (owner answers in docs/PLAN.md: Türkiye, Turkish, SAM licence accepted,
 no archive/datasets for training, no ODA, gpu80). Phase 1 (walking skeleton) done 2026-09-30; see
 PROGRESS.md for what is verified, the UNVERIFIED-ON-GPU list, deviations and deferred items.
-Phase 2 (ingest & understanding, S0/S1) done on CPU 2026-09-30: see PROGRESS.md for the measured
-numbers, the UNVERIFIED-ON-GPU list and deviations. Next: Phase 3 (plan extraction + Gate A).
+Phase 2 (ingest & understanding, S0/S1) done on CPU 2026-09-30. Phase 3 (plan extraction, S2,
+and Gate A, S3) done on CPU 2026-10-01: see PROGRESS.md for the measured plan table, misses, the
+UNVERIFIED-ON-GPU list and deviations. Next: Phase 4 (scene, cameras, base render).
 
 ## Commands
 - `make setup` (uv sync) · `make setup-blender` (official bpy 5.2.2 wheel, hash-locked, into
@@ -32,6 +33,11 @@ numbers, the UNVERIFIED-ON-GPU list and deviations. Next: Phase 3 (plan extracti
 - `python -m archrender.synth.corpus OUT --per-class N` writes a labelled synthetic corpus;
   `make train-classifier` retrains `configs/classifier/page_classifier_v1.json` (~20 min, OCR);
   `python -m archrender.understand.evaluate` runs the held-out S1 evaluation (also in `make eval`).
+- `make eval` prints the S2 plan table (`archrender.plan.evaluate`; `--plan-per-source N`, 0 skips):
+  per source type, real intake + S1 OCR, ground truth from the synthetic generator.
+- `python -m archrender.plan.seg_train OUT --smoke|--sheets N` trains the plan segmentation U-Net
+  (needs PyTorch: pod image); `archrender plan list|show|edit|resolve|confirm|accept|reject|approve`
+  is Gate A from the CLI; the UI editor is `#/projects/<id>/plan`.
 - `python -m archrender.ops.license_audit --lock deploy/vllm/requirements.lock` pre-audits the vLLM
   environment from PyPI metadata (CI does this); the release audits it again inside the image.
 - System tools used in tests (Tesseract tur+eng, libheif, LibreDWG): CI installs them (LibreDWG
@@ -70,9 +76,19 @@ numbers, the UNVERIFIED-ON-GPU list and deviations. Next: Phase 3 (plan extracti
 - Classifier features are versioned by `understand.features.FEATURE_NAMES`; changing them requires
   retraining (loading refuses a mismatched model). So does changing what feeds them (OCR
   preprocessing, text/visual extraction): retrain and commit the new JSON with the change.
-- Golden projects (`synth.golden`: G1 vector PDF + DXF + XLSX, G2 noisy scan) are the Phase-2
-  acceptance (`tests/integration/test_golden_s1.py`). Evaluate OCR/CV changes on scans of several
-  seeds and qualities (clean/medium/noisy, 200 and 300 DPI), not on one page.
+- Golden projects (`synth.golden`: G1 vector PDF + DXF + XLSX, G2 loft scan + phone photo + RCP,
+  G3 IFC office + imperial PDF) are the Phase-2/3 acceptance (`test_golden_s1.py`,
+  `test_golden_s2.py`); each plan document carries its plan → document transform for scoring.
+  Evaluate OCR/CV changes on scans of several seeds and qualities (clean/medium/noisy, 200 and 300
+  DPI), not on one page (`make eval` plan table, `tests/integration/test_plan_raster.py`).
+- Plans: S2 writes draft plan versions; edits are JSON Patches making new versions (never mutate a
+  version); runs pin `runs.plan_version`; approval needs no blocking issue (ADR-S22). Anything that
+  changes how a plan is derived from the same pages must bump the S2 stage version
+  (`plan/stage.py`), or cached extractions stay stale.
+- VLM coordinates only through `plan/assist.py` (triggers → hint → snap to evidence → `vlm_assisted`
+  + `PLAN_ASSIST_UNCONFIRMED`); never insert a hinted element without measured evidence
+  (ADR-S19/S24). Ground-truth hint sources (`synth.hints`) are for eval/tests only.
+- Validator defects for tests and eval live in `plan.defects` (one injector per defect).
 
 ## Environment notes (this cloud dev container)
 - No GPU. A Docker daemon can be started (`nohup dockerd >/tmp/dockerd.log 2>&1 &`); Docker Hub and

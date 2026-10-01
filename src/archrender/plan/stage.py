@@ -20,20 +20,24 @@ from typing import Any, Literal
 
 import numpy as np
 from PIL import Image
+from pydantic import Field
 
 from archrender.core.cas import CasRef
 from archrender.core.errors import ArchRenderError, ErrorCode
 from archrender.core.schemas.common import ModelRef, Severity, Strict
 from archrender.core.schemas.document import PageRef, Word
 from archrender.core.schemas.plan import DocTransform, Level, PlanGraph, ValidationIssue
-from archrender.core.schemas.provenance import Assumption, Conflict, fact
+from archrender.core.schemas.provenance import Assumption, Conflict, Method, fact
 from archrender.ingest.intake import page_refs
 from archrender.pipeline.engine import StageContext, StageDef, StageEngine
 from archrender.pipeline.services import Services
 from archrender.plan import versions
+from archrender.plan.annotate import apply_schedules, assign_tags, rcp_heights
+from archrender.plan.assist import HintSource, PageEvidence, VlmHintSource, run_assist
 from archrender.plan.builder import build_plan
 from archrender.plan.extract import dxf_extract, pdf_extract
 from archrender.plan.ifc import plan_from_ifc
+from archrender.plan.prims import TextPrim
 from archrender.plan.raster import raster_extract, raster_scale
 from archrender.plan.scale import (
     ScaleResult,
@@ -44,7 +48,7 @@ from archrender.plan.scale import (
     stated,
 )
 from archrender.plan.validate import blocking, validate_plan
-from archrender.understand.stage import S1Out, _effective_label, run_understanding
+from archrender.understand.stage import S1Out, _effective_label, run_understanding, vlm_serving
 from archrender.understand.text import fold
 
 SourceKind = Literal["ifc", "dxf", "pdf_vector", "raster"]
@@ -62,6 +66,8 @@ class S2Page(Strict):
 class S2In(Strict):
     project_id: str
     pages: list[S2Page]
+    # S1 schedules (door/window rows give opening sizes)
+    schedules: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class S2Out(Strict):
@@ -82,6 +88,8 @@ class PageResult:
     conflicts: list[Conflict] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     unexplained_gaps: int = 0
+    assist: dict[str, Any] | None = None
+    texts: list[TextPrim] = field(default_factory=list)  # the page's texts in the plan frame
 
 
 def _json(store: Any, ref: CasRef | None) -> Any:
@@ -149,10 +157,18 @@ def _scale_conflict(page_id: str, res: ScaleResult) -> list[Conflict]:
 class Extractor:
     """Per-page extraction (pure functions of the stored page data and the S1 analysis)."""
 
-    def __init__(self, svc: Services, store: Any, project_id: str) -> None:
+    def __init__(
+        self,
+        svc: Services,
+        store: Any,
+        project_id: str,
+        hints: HintSource | Literal["auto"] | None = "auto",
+    ) -> None:
+        """``hints``: the assist's hint source; "auto" = the VLM when it is serving."""
         self.svc = svc
         self.store = store
         self.project_id = project_id
+        self.hints = hints
 
     def page(self, p: S2Page, kind: SourceKind) -> PageResult:
         page = p.page
@@ -203,6 +219,7 @@ class Extractor:
             [],
             ex.notes + res.notes,
             res.unexplained_gaps,
+            texts=ex.prims.texts,
         )
 
     def _words(self, page: PageRef, a: S1Out | None) -> list[Word]:
@@ -256,6 +273,7 @@ class Extractor:
             _scale_conflict(page.id, res),
             b.notes,
             b.unexplained_gaps,
+            texts=ex.prims.texts,
         )
 
     def _raster(self, page: PageRef, a: S1Out | None, level: str) -> PageResult:
@@ -275,6 +293,7 @@ class Extractor:
         photo = a is not None and a.rectified is not None
         dpi = None if photo else page.dpi
         ocr, _ = self.svc.models.get_with_fallback("ocr", "S2")
+        wall_mask = plan_wall_mask(self.svc, rgb)
         sc, rv = raster_scale(
             gray,
             words,
@@ -282,6 +301,7 @@ class Extractor:
             dpi=dpi,
             rgb=rgb if colour else None,
             reader=ocr,
+            wall_mask=wall_mask,
         )
         if sc.result.estimate is None:
             raise ArchRenderError(
@@ -290,15 +310,37 @@ class Extractor:
                 "readable dimension strings, no door swings).",
                 "Calibrate the scale at Gate A with a known length, or upload the vector original.",
             )
-        ex = raster_extract(gray, words, sc.m_per_px, rgb=rgb if colour else None, vectors=rv)
-        b = build_plan(
-            ex.prims,
-            project=self.project_id,
-            version="extraction",
-            level_name=level,
-            source_doc=page.document_id,
-            source="raster",
+        ex = raster_extract(
+            gray, words, sc.m_per_px, rgb=rgb if colour else None, vectors=rv, wall_mask=wall_mask
         )
+
+        def build(prims: Any) -> Any:
+            return build_plan(
+                prims,
+                project=self.project_id,
+                version="extraction",
+                level_name=level,
+                source_doc=page.document_id,
+                source="raster",
+            )
+
+        b = build(ex.prims)
+        assist_report = None
+        if rv.body is not None and rv.ink is not None:
+            ev = PageEvidence(
+                rgb, rv.body, rv.ink, rv.stroke_px, sc.m_per_px, np.array(ex.doc_to_plan), dpi
+            )
+            res = run_assist(
+                b.plan,
+                ex.prims,
+                ev,
+                hint_source(self.svc) if self.hints == "auto" else self.hints,
+                lambda prims: build(prims).plan,
+                source_doc=page.document_id,
+            )
+            if res.plan is not b.plan:
+                b.plan = res.plan
+            assist_report = res.report(ev, page.id)
         t = DocTransform(
             doc_id=page.document_id,
             page=page.index,
@@ -306,6 +348,11 @@ class Extractor:
             method=sc.result.estimate.method,
         )
         notes = sc.notes + ex.notes + b.notes
+        if assist_report and assist_report["triggers"] and assist_report["source"] is None:
+            notes.append(
+                f"{len(assist_report['triggers'])} region(s) need attention; no VLM is serving to "
+                "suggest coordinates (Gate A shows them)"
+            )
         if photo:
             notes.insert(
                 0, "phone photo: rectified sheet (S1); scale from dimensions or door swings"
@@ -320,7 +367,27 @@ class Extractor:
             _scale_conflict(page.id, sc.result),
             notes,
             b.unexplained_gaps,
+            assist_report,
+            ex.prims.texts,
         )
+
+
+def plan_wall_mask(svc: Services, rgb: Any) -> Any:
+    """The wall body from the plan segmentation model when a profile maps the
+    ``plan_segmenter`` role (a promoted checkpoint, ADR-M06), else None (the CV body is used)."""
+    if "plan_segmenter" not in svc.profile.roles:
+        return None
+    seg, _ = svc.models.get_with_fallback("plan_segmenter", "S2")
+    return seg.wall_mask(rgb)
+
+
+def hint_source(svc: Services) -> HintSource | None:
+    """The VLM as a hint source when it is serving (ADR-S19), else None (triggers are still
+    reported for Gate A)."""
+    if vlm_serving(svc) in (None, "unavailable"):
+        return None
+    vlm, _ = svc.models.get_with_fallback("vlm", "S2")
+    return VlmHintSource(vlm)
 
 
 def _m(a: list[list[float]]) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
@@ -462,6 +529,64 @@ def assemble(
     return PlanGraph.model_validate(plan.model_dump())
 
 
+def annotate(
+    plan: PlanGraph,
+    results: list[PageResult],
+    rcps: list[PageResult],
+    schedules: list[dict[str, Any]],
+) -> tuple[PlanGraph, list[str]]:
+    """Opening tags and schedule sizes, then ceiling heights from the RCPs (``annotate``
+    module). An IFC model carries its own."""
+    if plan.source == "ifc":
+        return plan, []
+    notes: list[str] = []
+    for lv in plan.levels:
+        mine = [r for r in results if r.level_name == lv.name or len(plan.levels) == 1]
+        if not mine:
+            continue
+        r = min(mine, key=lambda x: (RANK[x.source], -len(x.plan.walls)))
+        plan, n = assign_tags(plan, r.texts, lv.id)
+        if n:
+            notes.append(f"{n} opening tag(s) read on page {r.page_id}")
+    plan, sched_notes = apply_schedules(plan, schedules)
+    notes += sched_notes
+    for rc in rcps:
+        level = next((lv.id for lv in plan.levels if lv.name == rc.level_name), None)
+        if level is None and len(plan.levels) == 1:
+            level = plan.levels[0].id
+        if level is None:
+            notes.append(f"RCP {rc.page_id}: its level {rc.level_name!r} is not in the plan")
+            continue
+        method: Method = (
+            "pdf_text"
+            if rc.source == "pdf_vector"
+            else "dxf_entity"
+            if rc.source == "dxf"
+            else "ocr"
+        )
+        plan, h_notes, h_issues = rcp_heights(
+            plan,
+            level,
+            rc.plan,
+            rc.texts,
+            source_doc=rc.transform.doc_id,
+            method=method,
+            page_id=rc.page_id,
+        )
+        notes += h_notes
+        for i in h_issues:  # kept as an assumption to review: issues are recomputed per version
+            plan.assumptions.append(
+                Assumption(
+                    key=f"rcp/{rc.page_id}/registration",
+                    value=None,
+                    reason=i.message,
+                    stage="S2",
+                    requires_review=True,
+                )
+            )
+    return plan, notes
+
+
 def _north(pages: list[S2Page], chosen: set[str]) -> tuple[float, str] | None:
     """North from S1's north arrow on a chosen 2D source page (sheet up = plan +y there)."""
     for p in pages:
@@ -483,11 +608,14 @@ def build_s2(svc: Services) -> StageDef[S2In, S2Out]:
     def run(inp: S2In, ctx: StageContext) -> S2Out:
         ex = Extractor(svc, ctx.store, inp.project_id)
         cands: list[tuple[S2Page, SourceKind]] = []
+        rcp_cands: list[tuple[S2Page, SourceKind]] = []
         for p in inp.pages:
             content = _json(ctx.store, p.page.content)
             kind = _source_kind(p.page, content)
             if kind is None:
                 continue
+            if kind != "ifc" and p.label == "ceiling_plan":
+                rcp_cands.append((p, kind))
             if kind != "ifc" and p.label != "floor_plan":
                 continue
             cands.append((p, kind))
@@ -520,6 +648,14 @@ def build_s2(svc: Services) -> StageDef[S2In, S2Out]:
             )
         chosen = {r.page_id for r in results}
         plan = assemble(inp.project_id, results, _north(inp.pages, chosen))
+        rcps: list[PageResult] = []
+        for p, kind in rcp_cands:
+            ctx.progress(0.88, f"S2 ceiling plan {p.page.id}")
+            try:
+                rcps.append(ex.page(p, kind))
+            except ArchRenderError as e:
+                failures.append({"page": p.page.id, "code": e.code.value, "message": e.message})
+        plan, annotations = annotate(plan, results, rcps, inp.schedules)
         issues = validate_plan(plan)
         plan = plan.model_copy(update={"issues": issues})
         ref = ctx.store.put_bytes(
@@ -537,16 +673,27 @@ def build_s2(svc: Services) -> StageDef[S2In, S2Out]:
                     "scale": r.scale,
                     "unexplained_gaps": r.unexplained_gaps,
                     "notes": r.notes,
+                    "assist": r.assist,
                 }
                 for r in results
             ],
             "failed": failures,
+            "annotations": annotations,
+            "ceiling_plans": [r.page_id for r in rcps],
             "skipped_rasters": skipped,
             "candidates": [{"page": p.page.id, "source": k} for p, k in cands],
         }
         return S2Out(plan=plan, plan_json=ref, issues=issues, extraction=extraction)
 
-    return StageDef("S2_plan", "2", S2Out, run, models=ocr_ref)
+    return StageDef(
+        "S2_plan",
+        "4",
+        S2Out,
+        run,
+        # a raster extracted without the VLM is recomputed once it serves (assist hints)
+        config=lambda: {"vlm": vlm_serving(svc)},
+        models=ocr_ref,
+    )
 
 
 def s2_input(svc: Services, project_id: str) -> S2In:
@@ -560,7 +707,13 @@ def s2_input(svc: Services, project_id: str) -> S2In:
             else ("other" if page.kind != "ifc" else "model")
         )
         pages.append(S2Page(page=page, label=label, analysis=analysis))
-    return S2In(project_id=project_id, pages=pages)
+    schedules = [
+        json.loads(r["schedule_json"])
+        for r in svc.db.query(
+            "SELECT schedule_json FROM schedules WHERE project_id = ? ORDER BY id", (project_id,)
+        )
+    ]
+    return S2In(project_id=project_id, pages=pages, schedules=schedules)
 
 
 def has_plan_source(svc: Services, project_id: str) -> bool:

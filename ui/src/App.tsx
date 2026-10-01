@@ -3,6 +3,7 @@ import { ApiFailure, api, post, setCsrf, type User } from "./api";
 import { ProjectsPage } from "./pages/Projects";
 import { ProjectPage } from "./pages/Project";
 import { RunPage } from "./pages/Run";
+import { PlanEditor } from "./pages/PlanEditor";
 
 // Hash routing (#/projects, #/projects/:id, #/runs/:id) so any proxy prefix works without rewrites.
 function useHashRoute(): string[] {
@@ -94,7 +95,8 @@ export function App() {
   };
 
   let page: React.ReactNode;
-  if (route[0] === "projects" && route[1]) page = <ProjectPage projectId={route[1]} />;
+  if (route[0] === "projects" && route[1] && route[2] === "plan") page = <PlanEditor projectId={route[1]} />;
+  else if (route[0] === "projects" && route[1]) page = <ProjectPage projectId={route[1]} />;
   else if (route[0] === "runs" && route[1]) page = <RunPage runId={route[1]} />;
   else page = <ProjectsPage user={user} />;
 

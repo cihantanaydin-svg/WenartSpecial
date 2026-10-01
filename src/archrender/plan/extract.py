@@ -153,6 +153,18 @@ def dxf_extract(entities: dict[str, Any], summary: dict[str, Any], doc_id: str) 
     return Extracted(prims, [[k, 0.0, -ox], [0.0, k, -oy]], unit, notes)
 
 
+def word_height(w: Word) -> float:
+    """Letter height of a word (px) from its axis-aligned box and angle: the box of a w × h word
+    turned by θ is W = w|cos θ| + h|sin θ|, H = w|sin θ| + h|cos θ|."""
+    bw, bh = w.x1 - w.x0, w.y1 - w.y0
+    th = math.radians(w.angle_deg)
+    c, s = abs(math.cos(th)), abs(math.sin(th))
+    det = c * c - s * s
+    if abs(det) < 0.2:  # near 45°: the box says little; half its smaller side
+        return 0.5 * min(bw, bh)
+    return max((c * bh - s * bw) / det, 0.3 * min(bw, bh))
+
+
 def pdf_extract(
     paths: dict[str, Any], words: list[Word], m_per_px: float, method: Method = "pdf_vector"
 ) -> Extracted:
@@ -166,7 +178,9 @@ def pdf_extract(
     def tx(x: float, y: float) -> tuple[float, float]:
         return x * m_per_px - ox, -y * m_per_px - oy
 
-    prims = Prims(method=method, resolution=m_per_px if method == "raster_cv" else 0.0)
+    prims = Prims(
+        method=method, resolution=m_per_px if method in ("raster_cv", "raster_seg") else 0.0
+    )
     for i, p in enumerate(paths.get("paths", [])):
         for sub, closed, curve in zip(p["sub"], p["closed"], p["curve"], strict=True):
             pts = np.array([tx(*q) for q in sub], np.float64)
@@ -187,7 +201,7 @@ def pdf_extract(
             )
     for w in words:
         x, y = tx((w.x0 + w.x1) / 2, (w.y0 + w.y1) / 2)
-        h = (w.y1 - w.y0) * m_per_px if w.angle_deg in (0.0, 180.0) else (w.x1 - w.x0) * m_per_px
+        h = word_height(w) * m_per_px
         prims.texts.append(TextPrim(w.text, x, y, h, w.angle_deg, w.source or method))
     unit = fact(m_per_px, "derived", 0.9, note="metres per page pixel from the scale estimate")
     return Extracted(prims, [[m_per_px, 0.0, -ox], [0.0, -m_per_px, -oy]], unit, [])

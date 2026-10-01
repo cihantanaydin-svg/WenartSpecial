@@ -43,9 +43,13 @@ def _register_fonts() -> None:
 
 
 def fmt_m(v: float, style: str) -> str:
-    """Dimension text: '3,50' (Turkish decimal comma), '3.50', or '350' (centimetres)."""
+    """Dimension text: '3,50' (Turkish decimal comma), '3.50', '350' (centimetres) or
+    feet-inches to the nearest inch ('12'-6"')."""
     if style == "cm":
         return f"{round(v * 100):d}"
+    if style == "ftin":
+        inches = round(v / 0.0254)
+        return f"{inches // 12}'-{inches % 12}\""
     s = f"{v:.2f}"
     return s.replace(".", ",") if style == "comma" else s
 
@@ -171,7 +175,12 @@ PROJECTS = [
 FIRMS = ["ÖRNEK MİMARLIK", "ÇİZGİ TASARIM STÜDYOSU", "KUZEY YAPI ATÖLYESİ"]
 
 
+IMPERIAL_SCALES = {48: '1/4" = 1\'-0"', 96: '1/8" = 1\'-0"', 24: '1/2" = 1\'-0"'}
+
+
 def scale_text(scale: int, rng: np.random.Generator) -> str:
+    if scale in IMPERIAL_SCALES:
+        return IMPERIAL_SCALES[scale]
     return str(rng.choice([f"1/{scale}", f"1:{scale}", f"M 1:{scale}"]))
 
 
@@ -278,10 +287,10 @@ class PlanFrame:
 
 
 def _fit_plan(
-    sheet_mm: tuple[float, float], extent_m: tuple[float, float]
+    sheet_mm: tuple[float, float], extent_m: tuple[float, float], imperial: bool = False
 ) -> tuple[int, float] | None:
     avail_w, avail_h = sheet_mm[0] - 20 - 10, sheet_mm[1] - 20 - 70
-    for s in (50, 75, 100):
+    for s in (48, 96) if imperial else (50, 75, 100):
         w, h = extent_m[0] * 1000 / s, extent_m[1] * 1000 / s
         if w <= avail_w and h <= avail_h:
             return s, 0.0
@@ -668,6 +677,7 @@ def floor_plan_page(
     spec: PlanSpec | None = None,
     wall_style: str | None = None,
     stamp: bool | None = None,
+    imperial: bool = False,
 ) -> Page:
     """Floor plan (or reflected ceiling plan) sheet of ``spec`` (default: ``layout`` drawn
     orthogonally, or a random layout). Ground truth: words, tags, rooms, dimensions, scale, north
@@ -677,7 +687,7 @@ def floor_plan_page(
     x0, y0, x1, y1 = spec.extent()
     extent = (x1 - x0 + 6.0, y1 - y0 + 6.0)
     for size in ("A3", "A2", "A1"):
-        fit = _fit_plan(SHEETS_MM[size], extent)
+        fit = _fit_plan(SHEETS_MM[size], extent, imperial)
         if fit:
             break
     assert fit is not None
@@ -701,7 +711,10 @@ def floor_plan_page(
         draw_room_labels(sh, fr, spec, rng, lang, room_numbers=room_numbers)
         draw_islands(sh, fr, spec, lang)
         draw_tags(sh, fr, spec, rng)
-        draw_dimensions(sh, fr, spec, "comma" if lang == "tr" else str(rng.choice(["dot", "cm"])))
+        dim_style = (
+            "ftin" if imperial else "comma" if lang == "tr" else str(rng.choice(["dot", "cm"]))
+        )
+        draw_dimensions(sh, fr, spec, dim_style)
         title = "ZEMİN KAT PLANI" if lang == "tr" else "GROUND FLOOR PLAN"
     level = "Zemin Kat" if lang == "tr" else "Ground Floor"
     # heading above the plan and any dimension chain on its top side (≤ 2.5 m outside the walls)
@@ -715,7 +728,7 @@ def floor_plan_page(
     )
     angle = float(rng.choice([0.0, 0.0, float(rng.uniform(-180, 180))]))
     north_arrow(sh, (sh.w_mm - 35) * MM, (sh.h_mm - 35) * MM, 9 * MM, angle, lang)
-    if rng.random() < 0.6:
+    if not imperial and rng.random() < 0.6:
         scale_bar(sh, 20 * MM, 18 * MM, scale)
     title_block(
         sh,

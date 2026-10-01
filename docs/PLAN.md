@@ -118,7 +118,7 @@ Scope: synthetic plan generator (raster with noise/skew/stamps/hatching/fonts/la
 distortion; vector PDF; DXF; exact GT). Extractors for IFC, DXF, vector PDF and raster (CV baseline).
 Shared PlanBuilder, scale estimators + reconciliation, dimension parser, registration, heights,
 validators. On-demand VLM coordinate assist (hint → snap to evidence → `vlm_assisted` provenance → Gate A confirmation). Gate A SVG editor with suggestion review. Training-example capture. Plan-segmentation training script
-(runs on the pod; trains on synthetic + firm archive; NC datasets forbidden).
+(runs on the pod; trains on synthetic data only, owner answer Q-4; NC datasets forbidden).
 Acceptance (`make eval` plan table):
 - Vector sources (DXF/PDF): wall F1 ≥ 0.98, opening F1 ≥ 0.95, scale error ≤ 1%.
 - Clean raster: wall F1 ≥ 0.92, opening F1 ≥ 0.88. Noisy raster: measured, routed to Gate A.

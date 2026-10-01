@@ -88,6 +88,18 @@ def _rule_class(page: PageRef, content: Any) -> tuple[str, float, str] | None:
     return None
 
 
+def vlm_serving(svc: Services) -> str | None:
+    """Model name if the profile's VLM is serving now, "unavailable", or None (no VLM role)."""
+    if "vlm" not in svc.profile.roles:
+        return None
+    entry = svc.models.entry_for("vlm")
+    if entry.impl is None or not entry.impl.endswith(":VllmVlm"):
+        return None
+    from archrender.models.impls.vllm_vlm import VllmVlm
+
+    return entry.name if VllmVlm(entry).probe() else "unavailable"
+
+
 def build_s1(svc: Services) -> StageDef[S1In, S1Out]:
     classifier_path = svc.settings.configs_dir / CLASSIFIER_FILE
 
@@ -98,15 +110,7 @@ def build_s1(svc: Services) -> StageDef[S1In, S1Out]:
         return [entry.ref()]
 
     def vlm_state() -> str | None:
-        """Model name if the profile's VLM is serving now, "unavailable", or None (no VLM role)."""
-        if "vlm" not in svc.profile.roles:
-            return None
-        entry = svc.models.entry_for("vlm")
-        if entry.impl is None or not entry.impl.endswith(":VllmVlm"):
-            return None
-        from archrender.models.impls.vllm_vlm import VllmVlm
-
-        return entry.name if VllmVlm(entry).probe() else "unavailable"
+        return vlm_serving(svc)
 
     def run(inp: S1In, ctx: StageContext) -> S1Out:
         page, store = inp.page, ctx.store

@@ -37,6 +37,7 @@ from shapely.geometry import Polygon
 from shapely.geometry.polygon import orient
 
 from archrender.core.schemas.document import Word
+from archrender.core.schemas.provenance import Method
 from archrender.plan.builder import MAX_T
 from archrender.plan.prims import circle_fit
 from archrender.understand.text import normalise_tag, parse_dimension
@@ -928,7 +929,10 @@ def vectorise(
     *,
     rgb: NDArray[np.uint8] | None = None,
     debug: bool = False,
+    wall_mask: NDArray[np.bool_] | None = None,
 ) -> RasterVectors:
+    """``wall_mask``: a wall body predicted by the plan segmentation model (``raster_seg``,
+    faces on its edges); it replaces the morphological wall body below."""
     notes: list[str] = []
     words = text_words(words)
     d = darkness(gray, 2.2 * MAX_T / m_per_px)
@@ -998,7 +1002,14 @@ def vectorise(
     # the mask edges lie on the outer edge of the outline strokes; the faces are the strokes'
     # centre lines, half a stroke inside (applied to the polygons, which keeps corners sharp)
     bias_px = stroke / 2
-    cuts = _glazing_cuts(body, stroke_runs, thin, thick, m_per_px, stroke)
+    if wall_mask is not None:
+        # the learned wall body: faces on its edges, openings already left out
+        body = _fill_small_holes(wall_mask.astype(np.uint8), (0.1 / m_per_px) ** 2)
+        bias_px = 0.0
+        notes.append("wall body from the plan segmentation model (raster_seg)")
+    cuts = (
+        _glazing_cuts(body, stroke_runs, thin, thick, m_per_px, stroke) if wall_mask is None else []
+    )
     for a, b, half in cuts:
         _cut(body, a, b, half + 1.5)
     if cuts:
@@ -1098,6 +1109,7 @@ def raster_scale(
     dpi: float | None,
     rgb: NDArray[np.uint8] | None = None,
     reader: Any = None,
+    wall_mask: NDArray[np.bool_] | None = None,
 ) -> tuple[RasterScale, RasterVectors]:
     """Scale of a raster plan: the stated scale (with the scan's DPI) and the dimension strings
     paired with the dimension lines vectorised at the best prior; vectorised again at the fused
@@ -1119,7 +1131,7 @@ def raster_scale(
     prior = ests[0].value if ests else 0.01
     if not ests:
         notes.append("no stated scale with a known DPI: 1 cm/px prior for the first pass")
-    rv = vectorise(gray, words, prior, rgb=rgb)
+    rv = vectorise(gray, words, prior, rgb=rgb, wall_mask=wall_mask)
     heights = sorted(w.y1 - w.y0 for w in words if w.angle_deg in (0.0, 180.0))
     # dimension text is the small text of a drawing (2–3 mm)
     text_px = float(np.percentile(heights, 25)) if heights else (2.5 * dpi / 25.4 if dpi else 20.0)
@@ -1167,7 +1179,7 @@ def raster_scale(
         return RasterScale(prior, res, passes, notes), rv
     m = res.estimate.value
     if abs(m - prior) / prior > 0.03:
-        rv = vectorise(gray, words, m, rgb=rgb)
+        rv = vectorise(gray, words, m, rgb=rgb, wall_mask=wall_mask)
         passes = 2
     return RasterScale(m, res, passes, notes), rv
 
@@ -1179,13 +1191,15 @@ def raster_extract(
     *,
     rgb: NDArray[np.uint8] | None = None,
     vectors: RasterVectors | None = None,
+    wall_mask: NDArray[np.bool_] | None = None,
 ) -> Any:
     """Raster page → ``Extracted`` (primitives in plan metres) for the PlanBuilder."""
     from archrender.plan.extract import pdf_extract
 
     words = text_words(words)
-    rv = vectors or vectorise(gray, words, m_per_px, rgb=rgb)
-    ex = pdf_extract(rv.paths, words, m_per_px, method="raster_cv")
+    rv = vectors or vectorise(gray, words, m_per_px, rgb=rgb, wall_mask=wall_mask)
+    method: Method = "raster_seg" if wall_mask is not None else "raster_cv"
+    ex = pdf_extract(rv.paths, words, m_per_px, method=method)
     ex.notes.extend(rv.notes)
     ex.prims.notes.extend(rv.notes)
     return ex

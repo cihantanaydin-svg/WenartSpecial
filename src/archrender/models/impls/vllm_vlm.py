@@ -199,3 +199,81 @@ class VllmVlm:
                 retryable=True,
             )
         return out
+
+    def locate_elements(self, tile: NDArray[np.uint8], question: str) -> dict[str, Any]:
+        """Points on a full-resolution plan tile (ADR-S19): walls as two centre-line ends,
+        openings as two jambs, in the tile's pixels. The answer is a hint only; the caller snaps
+        it to measured evidence. UNVERIFIED-ON-GPU."""
+        h, w = tile.shape[:2]
+        if max(h, w) > 1536:
+            raise ArchRenderError(
+                ErrorCode.STAGE_FAILED,
+                f"Tile {w}×{h} px is larger than the VLM input; it would be downscaled.",
+                "This is a bug in the caller: tiles are cut at full resolution (≤ 1536 px).",
+            )
+        point = {
+            "type": "array",
+            "items": {"type": "number"},
+            "minItems": 2,
+            "maxItems": 2,
+        }
+        schema = {
+            "type": "object",
+            "properties": {
+                "elements": {
+                    "type": "array",
+                    "maxItems": 8,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {
+                                "type": "string",
+                                "enum": ["wall", "door", "window", "opening"],
+                            },
+                            "points": {
+                                "type": "array",
+                                "items": point,
+                                "minItems": 2,
+                                "maxItems": 2,
+                            },
+                            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                        },
+                        "required": ["kind", "points", "confidence"],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["elements"],
+            "additionalProperties": False,
+        }
+        messages: list[dict[str, Any]] = [
+            {
+                "role": "system",
+                "content": "You locate elements on architectural floor plan drawings. Coordinates "
+                "are pixels of the given image: x to the right, y down, origin top-left. Answer "
+                "only with the JSON object requested.",
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": image_data_url(tile, max_px=1536)}},
+                    {
+                        "type": "text",
+                        "text": f"Image size: {w}×{h} px.\n{question}\nFor a wall give the two "
+                        "end points of its centre line; for a door, window or opening the two "
+                        "jambs.",
+                    },
+                ],
+            },
+        ]
+        out = self.chat_json(messages, schema, name="plan_points", max_tokens=1024)
+        for el in out.get("elements", []):
+            for x, y in el.get("points", []):
+                if not (-0.05 * w <= x <= 1.05 * w and -0.05 * h <= y <= 1.05 * h):
+                    raise ArchRenderError(
+                        ErrorCode.STAGE_FAILED,
+                        f"VLM point ({x}, {y}) lies outside the {w}×{h} tile.",
+                        "",
+                        retryable=True,
+                    )
+        return out

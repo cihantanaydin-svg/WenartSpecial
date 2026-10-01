@@ -54,3 +54,22 @@ pre.evidence { max-height: 220px; overflow: auto; background: #f6f6f8; padding: 
 .page-card img, .page-card .noimg { width: 100%; height: 130px; object-fit: contain; background: #f4f4f4; display: flex; align-items: center; justify-content: center; }
 .page-card select { width: 100%; margin-top: 4px; }
 .small { font-size: 12px; }
+.editor { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; align-items: start; }
+@media (max-width: 900px) { .editor { grid-template-columns: 1fr; } }
+.canvas { padding: 8px; }
+.toolbar { margin-bottom: 6px; }
+.plan-svg { width: 100%; height: 640px; background: #fff; border: 1px solid var(--line); border-radius: 6px; cursor: crosshair; user-select: none; }
+.plan-svg .room { fill: #e8f0fe; fill-opacity: .55; stroke: none; }
+.plan-svg .room.sel { fill: #c7dafc; }
+.plan-svg .room.issue { fill: #fde8e8; }
+.plan-svg .label { fill: #333; pointer-events: none; }
+.plan-svg .wall { fill: #3a3a3c; stroke: #3a3a3c; }
+.plan-svg .wall.sel { fill: var(--accent); stroke: var(--accent); }
+.plan-svg .wall.issue { fill: var(--bad); stroke: var(--bad); }
+.plan-svg .wall.assisted, .plan-svg .opening.assisted { stroke: #e67700; stroke-dasharray: 4 3; fill: #f59f00; }
+.plan-svg .opening { fill: #fff; stroke: #2b8a3e; }
+.plan-svg .opening.window { stroke: #1971c2; }
+.plan-svg .opening.sel { fill: #d0ebff; }
+.plan-svg .suggestion { stroke: #9c36b5; stroke-dasharray: 6 4; }
+.plan-svg .handle { fill: #fff; stroke: var(--accent); stroke-width: .02; cursor: move; }
+.side .card h2 { margin-top: 0; }

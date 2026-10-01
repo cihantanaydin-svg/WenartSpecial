@@ -46,7 +46,7 @@ from archrender.pipeline.services import Services  # noqa: E402
 from archrender.pipeline.worker import Worker  # noqa: E402
 
 NOT_MEASURED = {
-    "plan": "not measured: plan extractors + metrics arrive in Phase 3",
+    "plan": "see the S2 table below (skipped with --plan-per-source 0)",
     "fault_injection": "not measured: the fault-injection harness arrives in Phase 6",
     "vram": "not recorded: no GPU model stages in this build (cpu_test profile)",
 }
@@ -344,6 +344,12 @@ def main(argv: list[str] | None = None) -> int:
         default=3,
         help="S1 eval corpus size per class (0 = skip)",
     )
+    ap.add_argument(
+        "--plan-per-source",
+        type=int,
+        default=3,
+        help="S2 eval sheets per source type (0 = skip)",
+    )
     ap.add_argument("--keep", action="store_true", help="keep the throw-away workspace")
     args = ap.parse_args(argv)
     workdir = Path(tempfile.mkdtemp(prefix="archrender-eval-"))
@@ -368,6 +374,24 @@ def main(argv: list[str] | None = None) -> int:
         )
         print()
         print(render_s1(s1))
+    if args.plan_per_source:
+        from archrender.plan.evaluate import evaluate as evaluate_s2
+        from archrender.plan.evaluate import render as render_s2
+
+        plan_dir = Path(tempfile.mkdtemp(prefix="archrender-eval-plan-"))
+        try:
+            s2 = evaluate_s2(plan_dir, per_source=args.plan_per_source)
+        finally:
+            shutil.rmtree(plan_dir, ignore_errors=True)
+        result["plan_eval"] = s2
+        result["invariants"]["S2 sheets extracted"] = all(
+            row["failed"] == 0 for row in s2["rows"] if row["source"] != "photo"
+        )
+        result["invariants"]["validators detect every injected defect"] = (
+            s2["validators"]["detected"] == s2["validators"]["injected"]
+        )
+        print()
+        print(render_s2(s2))
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(result, indent=2), encoding="utf-8")

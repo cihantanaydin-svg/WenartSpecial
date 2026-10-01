@@ -84,3 +84,69 @@ def test_ui_full_flow(live: Live, page, tmp_path: Path) -> None:  # type: ignore
     shots = os.environ.get("ARCHRENDER_E2E_SCREENSHOTS")
     if shots:
         page.screenshot(path=str(Path(shots) / "run_page.png"), full_page=True)
+
+
+def test_ui_plan_editor_gate_a(live: Live, page, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """Gate A in the browser: the extracted plan, a room renamed, a wall added (rooms re-derived),
+    saved as a new version, approved."""
+    import time
+
+    from playwright.sync_api import expect
+
+    page.goto(live.url + "/")
+    page.fill("input[name=api_key]", live.admin_key)
+    page.click("text=Log in")
+    page.fill("input[name=project_name]", "Gate A")
+    page.click("text=Create project")
+    expect(page.locator("h1", has_text="Gate A")).to_be_visible()
+    plan = tmp_path / "Kat Planı.dxf"
+    plan.write_bytes(plan_dxf())
+    page.set_input_files("[data-testid=file-input]", str(plan))
+    expect(page.locator(".progress-row", has_text="done")).to_be_visible(timeout=30_000)
+    pid = page.url.rsplit("/", 1)[-1]
+    deadline = time.monotonic() + 120
+    while not live.svc.db.one(
+        "SELECT 1 FROM plan_versions WHERE project_id = ?", (pid,)
+    ):  # intake → S1 → S2
+        assert time.monotonic() < deadline, "no plan version"
+        time.sleep(0.5)
+
+    page.click("[data-testid=open-plan]")
+    expect(page.locator("[data-testid=plan-status]")).to_have_text("draft", timeout=20_000)
+    expect(page.locator("[data-testid=plan-svg] polygon.wall").first).to_be_visible()
+    rooms = page.locator("[data-testid=plan-svg] polygon.room")
+    n_rooms = rooms.count()
+    assert n_rooms >= 3
+
+    page.locator("[data-testid=room-R1]").click(force=True)
+    expect(page.locator("[data-testid=inspector]")).to_contain_text("room R1")
+    page.fill("input[name=room_name]", "Çalışma Odası")
+    page.locator("input[name=edit_note]").click()  # blur commits the field
+    expect(page.locator("[data-testid=pending]")).to_contain_text("1 pending")
+
+    # a wall across the largest room (two clicks), rooms re-derived on save
+    box = page.locator("[data-testid=room-R1]").bounding_box()
+    assert box is not None
+    page.click("text=Add wall")
+    y = box["y"] + box["height"] * 0.5
+    page.mouse.click(box["x"] + 2, y)  # by the walls: the clicks snap onto their centre lines
+    page.mouse.click(box["x"] + box["width"] - 2, y)
+    expect(page.locator("[data-testid=pending]")).to_contain_text("2 pending")
+    page.fill("input[name=edit_note]", "e2e edit")
+    page.click("text=Save as new version")
+    expect(page.locator("[data-testid=plan-version]")).to_contain_text("v2", timeout=20_000)
+    expect(page.locator("[data-testid=plan-svg] polygon.room")).to_have_count(n_rooms + 1)
+    expect(page.locator("[data-testid=plan-svg] text", has_text="Çalışma Odası")).to_be_visible()
+    # the split leaves the renamed room without a door and its area label wrong: blocking
+    expect(page.locator("[data-testid=issues] li.bad", has_text="ROOM_UNREACHABLE")).to_be_visible()
+    expect(page.locator("[data-testid=approve-plan]")).to_be_disabled()
+    shots = os.environ.get("ARCHRENDER_E2E_SCREENSHOTS")
+    if shots:
+        page.screenshot(path=str(Path(shots) / "plan_editor.png"), full_page=True)
+    page.locator("[data-testid^=wall-WE]").click(force=True)
+    page.click("text=Delete wall")
+    page.click("text=Save as new version")
+    expect(page.locator("[data-testid=plan-version]")).to_contain_text("v3", timeout=20_000)
+    expect(page.locator("[data-testid=plan-svg] polygon.room")).to_have_count(n_rooms)
+    page.click("[data-testid=approve-plan]")
+    expect(page.locator("[data-testid=plan-status]")).to_have_text("approved", timeout=20_000)
